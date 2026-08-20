@@ -4,14 +4,49 @@ A live radar for git worktrees: every worktree of every repo it knows
 about (see "Worktree discovery" below), most recently committed first,
 with open-or-focus-a-VS-Code-window on Enter.
 
-understory is the read-only, always-on counterpart to
-[coppice](https://github.com/luiul/coppice) (which does the actual
-worktree work: creating, switching, and cleaning them up, on top of
-[`wt`](https://worktrunk.dev)) and to
-[canopy](https://github.com/luiul/canopy) (the same live-dashboard idea,
-for agent CLI sessions instead of worktrees). Three tools, one job each:
-`wt`/coppice manage worktrees, understory radars them, canopy radars
-agents.
+understory is the read-only, always-on counterpart to `wt`/coppice, which
+do the actual worktree work; see [Ecosystem](#ecosystem) below for how
+all the pieces fit together.
+
+## Ecosystem
+
+understory is one of four tools that split "what's running, and where, on
+this machine" into two independent radars over two independent lifecycle
+tools, one pair for git worktrees, one pair for agent sessions:
+
+| Tool | Layer | Job |
+|---|---|---|
+| [`wt`](https://worktrunk.dev) (worktrunk) | engine | creates/removes worktrees, runs lifecycle hooks (`post-start`, `pre-remove`, ...), maintains the shared registry |
+| [coppice](https://github.com/luiul/coppice) | lifecycle CLI | cross-repo `new`/`list`/`remove`/`clean` worktrees, on top of `wt`, from anywhere on disk |
+| **understory** (this repo) | worktree radar | live, read-only dashboard of every worktree in the registry; open-or-focus a VS Code window on Enter |
+| [canopy](https://github.com/luiul/canopy) | agent radar | live, read-only dashboard of every agent CLI session on the machine; jump-to-window on Enter |
+
+```mermaid
+flowchart LR
+    wt["wt (worktrunk)<br/>engine + hooks"]
+    coppice["coppice<br/>cross-repo worktree CLI"]
+    registry[("~/.cache/wt/known-repos")]
+    understory["understory<br/>worktree radar"]
+
+    coppice -- new/remove/clean, via --> wt
+    wt -- post-start hook writes --> registry
+    coppice -- also writes, on first touch --> registry
+    registry -- read only --> understory
+```
+
+canopy doesn't appear in that diagram: it's fully independent of `wt`'s
+registry and of the other three tools here, discovering agent processes
+directly (`ps`/`lsof`, herdr's own JSON API, AppleScript for Ghostty)
+rather than reading anything worktree-related. It's included in the table
+above because the two dashboards (canopy, understory) are meant to run
+side by side, each a single-view radar over one kind of thing, rather
+than one tool trying to cover both. That's not an accident of scope, it's
+the *reason* this repo exists: understory started as a second view inside
+canopy itself (agent-to-worktree matching, jump-to-worktree), and was
+pulled out into its own tool specifically so canopy's job could stay
+"agent sessions," nothing else, and this one's could stay "worktrees,"
+nothing else. See [What this deliberately doesn't do](#what-this-deliberately-doesnt-do)
+for the one piece of that old view intentionally not carried over.
 
 ## What it looks like
 
