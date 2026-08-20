@@ -69,9 +69,17 @@ prompt. Status is `wt`'s own compact status glyphs (dirty/ahead/behind),
 reused as-is rather than re-derived here.
 
 Enter opens (or, if a window is already open on that path, focuses) a VS
-Code window there: `code --reuse-window <path>`, not `-n`/`--new-window`,
-since Enter on a row gets pressed repeatedly and `-n` would stack up a
-duplicate window on every press instead of reusing the one already there.
+Code window there. Checks for an already-open window itself first, via
+AppleScript against each window's title, and only forces a brand-new one
+(`-n`) once it knows none is already open: `code --reuse-window` alone
+turns out not to be enough for this, since it silently hijacks whichever
+window was last active instead of opening a fresh one whenever no window
+already has the given path open (confirmed both empirically and in
+upstream reports, e.g. microsoft/vscode#121926) — exactly the case a
+worktree row that's never been opened before hits on every first press.
+Same-row repeated presses stay safe from duplicate windows precisely
+because the already-open check finds that new window on every
+subsequent press.
 
 ## Worktree discovery
 

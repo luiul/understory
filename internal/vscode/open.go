@@ -4,6 +4,11 @@
 // terminal), since understory needs the exact same open-or-focus behavior
 // for a worktree row with no agent connection of its own to jump to:
 // Enter on a worktree always ends up here.
+//
+// Unlike canopy's jump package, Open doesn't just hand `--reuse-window`
+// to the `code` CLI and trust it to find the right window: see window.go
+// for why that alone isn't enough to actually get switch-or-create
+// behavior, and what checks the already-open case itself instead.
 package vscode
 
 import (
@@ -23,6 +28,11 @@ type Result struct {
 type deps struct {
 	lookPathCode func() (string, bool)
 	runCommand   func(args []string) (exitOK bool, stderr string)
+	// windowTitles and raiseWindow implement the already-open check (see
+	// window.go); split out so tests can fake "a window is/isn't already
+	// open on this path" without shelling out to osascript.
+	windowTitles func() ([]string, error)
+	raiseWindow  func(title string) (bool, error)
 }
 
 func defaultDeps() deps {
@@ -38,14 +48,21 @@ func defaultDeps() deps {
 			err := cmd.Run()
 			return err == nil, strings.TrimSpace(stderr.String())
 		},
+		windowTitles: windowTitles,
+		raiseWindow:  raiseWindow,
 	}
 }
 
 // Open opens, or focuses if a window is already open on path, a VS Code
-// window there, using the real OS. Uses `--reuse-window`, not
-// `-n`/`--new-window`: this is called on every Enter press on the same
-// row, and `-n` would stack up a duplicate window each time instead of
-// reusing the one already there.
+// window there, using the real OS. Checks for an already-open window
+// itself (see window.go) rather than leaning on `code --reuse-window`
+// alone: that flag only reuses the right window when one already has
+// path open, and silently hijacks whichever window was last active
+// otherwise — exactly the case a worktree row that's never been opened
+// before hits every time. Explicitly forces a new window (`-n`) instead
+// once we know none is already open, which is safe against Enter being
+// pressed repeatedly on the same row precisely because the already-open
+// check above will find that new window on every subsequent press.
 func Open(path string) Result {
 	return open(defaultDeps(), path)
 }
@@ -55,8 +72,31 @@ func open(d deps, path string) Result {
 		return Result{false, "No known path to open."}
 	}
 
+	alreadyOpen, titlesErr := d.windowTitles()
+	if titlesErr == nil {
+		if title, ok := matchWindowTitle(alreadyOpen, path); ok {
+			if raised, raiseErr := d.raiseWindow(title); raiseErr == nil && raised {
+				return Result{true, "Focused VS Code window for " + path + "."}
+			}
+			// Window vanished between the check and the raise (closed in
+			// the meantime) or raising it failed outright: fall through to
+			// opening fresh, same as if it had never matched at all.
+		}
+	}
+
 	if codeBin, ok := d.lookPathCode(); ok {
-		if exitOK, _ := d.runCommand([]string{codeBin, "--reuse-window", path}); exitOK {
+		// titlesErr != nil means the already-open check itself couldn't run
+		// (VS Code scripting not permitted yet, most likely): fall back to
+		// the CLI's own best-effort reuse instead of risking a duplicate
+		// window on every press, same as before this file existed.
+		flag := "-n"
+		if titlesErr != nil {
+			flag = "--reuse-window"
+		}
+		if exitOK, _ := d.runCommand([]string{codeBin, flag, path}); exitOK {
+			if flag == "-n" {
+				return Result{true, "Opened a new VS Code window for " + path + "."}
+			}
 			return Result{true, "Focused VS Code window for " + path + "."}
 		}
 	}
