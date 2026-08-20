@@ -109,17 +109,17 @@ func TestApplyWorktreesKeepsThePreviouslySelectedPathSelected(t *testing.T) {
 }
 
 func TestBuildWorktreeRowsPlaceholderWhenEmpty(t *testing.T) {
-	rows := buildWorktreeRows(nil, 0, "", time.Now())
+	rows := buildWorktreeRows(nil, 0, "", nil, time.Now())
 	if len(rows) != 1 {
 		t.Fatalf("got %d rows, want 1 placeholder row", len(rows))
 	}
-	if len(rows[0]) != 7 {
-		t.Fatalf("got %d cells, want 7 to match worktreeColumns", len(rows[0]))
+	if len(rows[0]) != 8 {
+		t.Fatalf("got %d cells, want 8 to match worktreeColumns", len(rows[0]))
 	}
 }
 
 func TestBuildWorktreeRowsMarksTheCursorRow(t *testing.T) {
-	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), wtEntry("/w/b", "b", 0)}, 1, "", time.Now())
+	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), wtEntry("/w/b", "b", 0)}, 1, "", nil, time.Now())
 	if rows[0][0] != "" || rows[1][0] != cursorMarker {
 		t.Fatalf("got markers %q, %q, want cursor on row 1", rows[0][0], rows[1][0])
 	}
@@ -129,7 +129,7 @@ func TestBuildWorktreeRowsBlanksTheRepeatedRepoLabelWithinAGroup(t *testing.T) {
 	// Same repo (acme/widgets) back to back: only the first row should
 	// carry the label, so the group reads as one block instead of
 	// repeating the same text down every row.
-	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), wtEntry("/w/b", "b", time.Hour)}, 0, "", time.Now())
+	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), wtEntry("/w/b", "b", time.Hour)}, 0, "", nil, time.Now())
 	if rows[0][1] != "acme/widgets" {
 		t.Fatalf("got %q, want the first row of a group to carry its repo label", rows[0][1])
 	}
@@ -139,7 +139,7 @@ func TestBuildWorktreeRowsBlanksTheRepeatedRepoLabelWithinAGroup(t *testing.T) {
 }
 
 func TestBuildWorktreeRowsRelabelsWhenTheRepoChanges(t *testing.T) {
-	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), otherRepoEntry("/w/b", "b", time.Hour)}, 0, "", time.Now())
+	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), otherRepoEntry("/w/b", "b", time.Hour)}, 0, "", nil, time.Now())
 	if rows[0][1] != "acme/widgets" || rows[1][1] != "other/gizmos" {
 		t.Fatalf("got %q, %q, want both distinct repo labels shown", rows[0][1], rows[1][1])
 	}
@@ -176,12 +176,28 @@ func TestBuildWorktreeRowsShowsWorktreeAndMergeColumns(t *testing.T) {
 	w := wtEntry("/w/a", "a", 0)
 	w.Dirty = true
 	w.MergeStatus = worktree.MergeStatusUnmerged
-	rows := buildWorktreeRows([]worktree.Entry{w}, 0, "", time.Now())
-	if rows[0][4] != "dirty" {
-		t.Fatalf("got %q, want the Worktree cell to read dirty", rows[0][4])
+	rows := buildWorktreeRows([]worktree.Entry{w}, 0, "", nil, time.Now())
+	if rows[0][colWorktree] != "dirty" {
+		t.Fatalf("got %q, want the Worktree cell to read dirty", rows[0][colWorktree])
 	}
-	if rows[0][5] != worktree.MergeStatusUnmerged {
-		t.Fatalf("got %q, want the Merge cell to read %q", rows[0][5], worktree.MergeStatusUnmerged)
+	if rows[0][colMerge] != worktree.MergeStatusUnmerged {
+		t.Fatalf("got %q, want the Merge cell to read %q", rows[0][colMerge], worktree.MergeStatusUnmerged)
+	}
+}
+
+func TestBuildWorktreeRowsClosedColumnBlankWhenNeverObservedClosed(t *testing.T) {
+	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0)}, 0, "", nil, time.Now())
+	if rows[0][colClosed] != "" {
+		t.Fatalf("got %q, want a blank Closed cell with no closedAt entry", rows[0][colClosed])
+	}
+}
+
+func TestBuildWorktreeRowsClosedColumnShowsElapsedTime(t *testing.T) {
+	now := time.Now()
+	closedAt := map[string]time.Time{"/w/a": now.Add(-3 * time.Minute)}
+	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0)}, 0, "", closedAt, now)
+	if rows[0][colClosed] != "3m" {
+		t.Fatalf("got %q, want %q", rows[0][colClosed], "3m")
 	}
 }
 
@@ -278,9 +294,32 @@ func TestResolveWorktreeCursorFallsBackWhenPathIsGone(t *testing.T) {
 }
 
 func TestWorktreeColumnsPathNeverShrinksBelowTheFloor(t *testing.T) {
-	cols := worktreeColumns(50)
+	cols := worktreeColumns(50, nil)
 	last := cols[len(cols)-1]
 	if last.Width < minPathWidth {
 		t.Fatalf("got Path width %d, want at least %d", last.Width, minPathWidth)
+	}
+}
+
+func TestWorktreeColumnsRepoGrowsToFitTheLongestLabelInsteadOfTruncating(t *testing.T) {
+	long := wtEntry("/w/a", "a", 0)
+	long.Owner = "hellofresh"
+	long.Repo = "isa-orchestration-and-something-long"
+	wantWidth := len(repoLabel(long)) // ASCII-only label; runewidth.StringWidth == len here
+
+	cols := worktreeColumns(200, []worktree.Entry{long})
+
+	if got := cols[colRepo].Width; got != wantWidth {
+		t.Fatalf("got Repo width %d, want %d (the full label's width, untruncated)", got, wantWidth)
+	}
+}
+
+func TestWorktreeColumnsRepoNeverShrinksBelowItsFloor(t *testing.T) {
+	short := wtEntry("/w/a", "a", 0) // "acme/widgets", shorter than repoColWidth
+
+	cols := worktreeColumns(200, []worktree.Entry{short})
+
+	if got := cols[colRepo].Width; got != repoColWidth {
+		t.Fatalf("got Repo width %d, want the floor %d for a short label", got, repoColWidth)
 	}
 }

@@ -38,3 +38,21 @@ func TestMatchWindowTitleEmptyTitleListNeverMatches(t *testing.T) {
 		t.Fatalf("want no match against an empty title list")
 	}
 }
+
+func TestOpenPathsReportsOpenAndClosedSeparately(t *testing.T) {
+	titles := []string{"understory — main"}
+	got := openPaths(titles, []string{"/x/understory", "/x/canopy"})
+	if !got["/x/understory"] {
+		t.Fatalf("got %+v, want /x/understory open", got)
+	}
+	if got["/x/canopy"] {
+		t.Fatalf("got %+v, want /x/canopy not open", got)
+	}
+}
+
+func TestOpenPathsHandlesAnEmptyTitleList(t *testing.T) {
+	got := openPaths(nil, []string{"/x/understory"})
+	if got["/x/understory"] {
+		t.Fatalf("got %+v, want nothing open when there are no windows at all", got)
+	}
+}

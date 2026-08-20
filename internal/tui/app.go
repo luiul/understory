@@ -72,7 +72,14 @@ func shortenHome(path, home string) string {
 }
 
 type tickMsg struct{}
-type pollResultMsg struct{ worktrees []worktree.Entry }
+type pollResultMsg struct {
+	worktrees []worktree.Entry
+	// openPaths maps a worktree's Path to whether a VS Code window is
+	// currently open on it, or nil if the check itself failed (e.g. the
+	// Automation permission for scripting VS Code isn't granted yet) —
+	// see updateWindowState for how that distinction is handled.
+	openPaths map[string]bool
+}
 type openResultMsg struct{ result vscode.Result }
 type clearNotifyMsg struct{ token int }
 
@@ -83,6 +90,14 @@ type Model struct {
 
 	worktrees []worktree.Entry // every known worktree, raw (unsorted) from the last successful poll
 	cursor    int              // remembers selection by-path across polls; table.Cursor() is the live ground truth while running
+
+	// wasOpen/closedAt track each worktree's VS Code window across polls,
+	// keyed by Entry.Path, so the Closed column can show "closed Xm ago"
+	// (see updateWindowState). Both are nil until the first poll whose
+	// window check actually succeeds; a nil closedAt just means every
+	// Closed cell renders blank, not an error.
+	wasOpen  map[string]bool
+	closedAt map[string]time.Time
 
 	table table.Model
 
@@ -97,7 +112,7 @@ type Model struct {
 // New builds the dashboard model, polling at interval.
 func New(interval time.Duration) Model {
 	t := table.New(
-		table.WithColumns(worktreeColumns(0)),
+		table.WithColumns(worktreeColumns(0, nil)),
 		table.WithFocused(true),
 		table.WithHeight(15),
 	)
@@ -123,7 +138,16 @@ func tickCmd(interval time.Duration) tea.Cmd {
 
 func pollCmd() tea.Cmd {
 	return func() tea.Msg {
-		return pollResultMsg{worktrees: worktree.ListAll(worktree.KnownRepoPaths())}
+		entries := worktree.ListAll(worktree.KnownRepoPaths())
+		paths := make([]string, len(entries))
+		for i, e := range entries {
+			paths[i] = e.Path
+		}
+		// A failed window check (nil, non-nil err) becomes a nil openPaths;
+		// updateWindowState treats that as "unknown", leaving wasOpen/closedAt
+		// untouched rather than reading it as "everything just closed".
+		open, _ := vscode.OpenPaths(paths)
+		return pollResultMsg{worktrees: entries, openPaths: open}
 	}
 }
 
@@ -167,6 +191,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(pollCmd(), tickCmd(m.interval))
 
 	case pollResultMsg:
+		m.updateWindowState(msg.openPaths)
 		m.applyWorktrees(msg.worktrees)
 		return m, nil
 
@@ -219,7 +244,37 @@ func clampCursor(idx, n int) int {
 // waiting for the next poll.
 func (m *Model) refreshCursorMarker() {
 	m.cursor = clampCursor(m.table.Cursor(), len(m.displayedWorktrees()))
-	m.table.SetRows(buildWorktreeRows(m.displayedWorktrees(), m.cursor, m.home, time.Now()))
+	m.table.SetRows(buildWorktreeRows(m.displayedWorktrees(), m.cursor, m.home, m.closedAt, time.Now()))
+}
+
+// updateWindowState folds a fresh open-window observation (see
+// vscode.OpenPaths, called from pollCmd) into wasOpen/closedAt: a path
+// that was open on the previous observation and isn't now gets stamped
+// with "closed just now" in closedAt. open being nil (the check itself
+// failed, e.g. the Automation permission isn't granted yet) leaves both
+// maps untouched rather than treating "couldn't tell" as "everything
+// just closed" — the same fail-safe distinction vscode.Open itself makes
+// on a window-titles error. A path never previously seen open (the
+// common case right after understory starts) is never stamped either:
+// wasOpen[path] defaults to false for an unseen key, so there's nothing
+// to record as "closed" yet.
+func (m *Model) updateWindowState(open map[string]bool) {
+	if open == nil {
+		return
+	}
+	if m.wasOpen == nil {
+		m.wasOpen = map[string]bool{}
+	}
+	if m.closedAt == nil {
+		m.closedAt = map[string]time.Time{}
+	}
+	now := time.Now()
+	for path, isOpen := range open {
+		if !isOpen && m.wasOpen[path] {
+			m.closedAt[path] = now
+		}
+		m.wasOpen[path] = isOpen
+	}
 }
 
 // resize rebuilds columns (Path's width depends on m.width) and rows for
@@ -233,8 +288,8 @@ func (m *Model) resize() {
 	// currently set, so swapping to a column count the old rows don't
 	// match panics if the two are ever briefly out of sync mid-update.
 	m.table.SetRows(nil)
-	m.table.SetColumns(worktreeColumns(m.width))
-	m.table.SetRows(buildWorktreeRows(m.displayedWorktrees(), cursor, m.home, time.Now()))
+	m.table.SetColumns(worktreeColumns(m.width, m.displayedWorktrees()))
+	m.table.SetRows(buildWorktreeRows(m.displayedWorktrees(), cursor, m.home, m.closedAt, time.Now()))
 	m.table.SetCursor(cursor)
 }
 

@@ -7,16 +7,22 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/table"
+	"github.com/mattn/go-runewidth"
 
 	"github.com/luiul/understory/internal/worktree"
 )
 
-// worktreeColWidth constants for the view's fixed columns; Path gets
-// whatever's left, floored at minPathWidth.
+// worktreeColWidth constants for the view's columns. repoColWidth is only
+// a floor (see repoColumnWidth): the Repo column itself grows to fit
+// whichever displayed repo label is longest, so a long owner/repo name
+// is never truncated the way a fixed width would. Branch/Updated/
+// Closed/Worktree/Merge stay fixed; Path gets whatever's left after all
+// of those, floored at minPathWidth.
 const (
 	repoColWidth     = 16
 	branchColWidth   = 20
-	ageColWidth      = 8
+	updatedColWidth  = 8
+	closedColWidth   = 8
 	worktreeColWidth = 8
 	mergeColWidth    = 9
 	minPathWidth     = 20
@@ -29,21 +35,41 @@ const (
 	colCursor = iota
 	colRepo
 	colBranch
-	colAge
+	colUpdated
+	colClosed
 	colWorktree
 	colMerge
 	colPath
 )
 
-// worktreeColumns builds the view's columns for the given terminal width:
-// Repo/Branch/Age/Worktree/Merge are fixed width, Path fills the
-// remainder.
-func worktreeColumns(width int) []table.Column {
+// repoColumnWidth is the Repo column's width for the given worktree set:
+// repoColWidth's floor, or the longest displayed repo label's own display
+// width if that's wider. Every entry is measured, not just the ones whose
+// label actually renders (buildWorktreeRows blanks a repeated label within
+// a group), since the un-blanked first row of that same group still needs
+// room for it. runewidth.StringWidth (not len) so a multi-byte owner/repo
+// name is measured the same way bubbles/table itself lays out cells.
+func repoColumnWidth(worktrees []worktree.Entry) int {
+	width := repoColWidth
+	for _, w := range worktrees {
+		if lw := runewidth.StringWidth(repoLabel(w)); lw > width {
+			width = lw
+		}
+	}
+	return width
+}
+
+// worktreeColumns builds the view's columns for the given terminal width
+// and worktree set: Repo grows to fit its widest displayed label (see
+// repoColumnWidth), Branch/Updated/Closed/Worktree/Merge are fixed width,
+// and Path fills whatever's left.
+func worktreeColumns(width int, worktrees []worktree.Entry) []table.Column {
 	cols := []table.Column{
 		{Title: "", Width: 1}, // cursorMarker
-		{Title: "Repo", Width: repoColWidth},
+		{Title: "Repo", Width: repoColumnWidth(worktrees)},
 		{Title: "Branch", Width: branchColWidth},
-		{Title: "Age", Width: ageColWidth},
+		{Title: "Updated", Width: updatedColWidth},
+		{Title: "Closed", Width: closedColWidth},
 		{Title: "Worktree", Width: worktreeColWidth},
 		{Title: "Merge", Width: mergeColWidth},
 	}
@@ -125,7 +151,12 @@ func resolveWorktreeCursor(displayed []worktree.Entry, path string, fallback int
 
 // applyWorktrees stores a fresh worktree poll, keeps whichever worktree
 // (by path) was previously selected selected, and rebuilds the table's
-// rows.
+// columns and rows. Columns are rebuilt here too, not just in resize:
+// repoColumnWidth depends on the worktree set itself, so a freshly
+// polled repo with a longer owner/repo label needs the Repo column
+// widened immediately, not just on the next terminal resize. closedAt is
+// forwarded to buildWorktreeRows as-is (see Model.updateWindowState,
+// which owns it); applyWorktrees itself never mutates it.
 func (m *Model) applyWorktrees(fresh []worktree.Entry) {
 	oldCursor := clampCursor(m.table.Cursor(), len(m.displayedWorktrees()))
 	oldDisplayed := m.displayedWorktrees() // still against the OLD m.worktrees
@@ -139,7 +170,12 @@ func (m *Model) applyWorktrees(fresh []worktree.Entry) {
 	newDisplayed := m.displayedWorktrees()
 	m.cursor = resolveWorktreeCursor(newDisplayed, previousPath, oldCursor)
 
-	m.table.SetRows(buildWorktreeRows(newDisplayed, m.cursor, m.home, time.Now()))
+	// Clear rows before changing columns: see resize's own comment on why
+	// (bubbles/table re-renders immediately against whatever's currently
+	// set, so a column/row count mismatch mid-update panics).
+	m.table.SetRows(nil)
+	m.table.SetColumns(worktreeColumns(m.width, newDisplayed))
+	m.table.SetRows(buildWorktreeRows(newDisplayed, m.cursor, m.home, m.closedAt, time.Now()))
 	m.table.SetCursor(m.cursor)
 }
 
@@ -160,7 +196,10 @@ func (m Model) selectedWorktree() (worktree.Entry, bool) {
 
 // buildWorktreeRows constructs the view's rows from an already-sorted
 // (see sortWorktrees) worktree list. cursor picks which row's leading
-// cell carries cursorMarker.
+// cell carries cursorMarker. closedAt (see Model.updateWindowState) maps
+// a worktree's Path to when understory last observed its VS Code window
+// going from open to closed; nil or a missing entry both render as a
+// blank Closed cell.
 //
 // The Repo cell is only printed on the first row of each repo's block:
 // sortWorktrees already guarantees every worktree of the same repo is
@@ -176,9 +215,9 @@ func (m Model) selectedWorktree() (worktree.Entry, bool) {
 // the same two plain-word signals coppice's own worktree table shows:
 // whether the working tree itself is dirty/clean/stale, and separately
 // whether the branch has been merged into main yet.
-func buildWorktreeRows(worktrees []worktree.Entry, cursor int, home string, now time.Time) []table.Row {
+func buildWorktreeRows(worktrees []worktree.Entry, cursor int, home string, closedAt map[string]time.Time, now time.Time) []table.Row {
 	if len(worktrees) == 0 {
-		return []table.Row{{"", "", "", "", "", "", noWorktreesMessage()}}
+		return []table.Row{{"", "", "", "", "", "", "", noWorktreesMessage()}}
 	}
 
 	rows := make([]table.Row, len(worktrees))
@@ -196,12 +235,28 @@ func buildWorktreeRows(worktrees []worktree.Entry, cursor int, home string, now 
 			label,
 			w.Branch,
 			humanizeSince(now.Sub(w.CommitTime)),
+			closedLabel(closedAt, w.Path, now),
 			worktreeStatusLabel(w),
 			mergeStatusLabel(w),
 			shortenHome(w.Path, home),
 		}
 	}
 	return rows
+}
+
+// closedLabel is the Closed column's rendering of closedAt[path]: blank
+// if understory hasn't observed that worktree's VS Code window go from
+// open to closed (either it's still open, was never opened this run, or
+// closedAt itself is nil, e.g. the window-check permission isn't granted
+// yet), the elapsed time since that observation otherwise. Deliberately
+// reuses humanizeSince rather than a separate formatter, so "closed 3m
+// ago" reads the same as the Updated column's own durations.
+func closedLabel(closedAt map[string]time.Time, path string, now time.Time) string {
+	t, ok := closedAt[path]
+	if !ok {
+		return ""
+	}
+	return humanizeSince(now.Sub(t))
 }
 
 // worktreeStatusLabel is the Worktree column's plain-word rendering of

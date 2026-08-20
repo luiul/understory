@@ -126,6 +126,34 @@ func escapeForAppleScript(s string) string {
 // key, same class of limitation as canopy's own cwd-based Ghostty match:
 // two different paths that happen to share a leaf folder name are
 // indistinguishable by title alone.
+// OpenPaths reports, for each of paths, whether a VS Code window is
+// currently open on it (see matchWindowTitle's doc for the matching
+// rule). Fetches the full window title list once via windowTitles
+// regardless of how many paths are checked, the same call Open's own
+// already-open check uses. Returns a nil map and the underlying error if
+// the title check itself failed (e.g. the Automation permission for
+// scripting VS Code hasn't been granted yet); callers should treat that
+// as "unknown" rather than as "nothing is open" (see windowTitles' own
+// doc on that distinction).
+func OpenPaths(paths []string) (map[string]bool, error) {
+	titles, err := windowTitles()
+	if err != nil {
+		return nil, err
+	}
+	return openPaths(titles, paths), nil
+}
+
+// openPaths is OpenPaths' pure matching logic, split out so it's testable
+// against a fake title list without shelling out to osascript.
+func openPaths(titles, paths []string) map[string]bool {
+	open := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		_, ok := matchWindowTitle(titles, p)
+		open[p] = ok
+	}
+	return open
+}
+
 func matchWindowTitle(titles []string, path string) (string, bool) {
 	base := filepath.Base(path)
 	if base == "" {
