@@ -1,0 +1,6 @@
+/bin/
+/dist/
+/understory
+*.test
+*.out
+.DS_Store
