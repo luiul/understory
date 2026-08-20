@@ -80,6 +80,7 @@ type clearNotifyMsg struct{ token int }
 type Model struct {
 	interval time.Duration
 	home     string
+	showMain bool // include each repo's main worktree in the view; see New's doc
 
 	worktrees []worktree.Entry // every known worktree, raw (unsorted) from the last successful poll
 	cursor    int              // remembers selection by-path across polls; table.Cursor() is the live ground truth while running
@@ -94,8 +95,14 @@ type Model struct {
 	quitting      bool
 }
 
-// New builds the dashboard model, polling at interval.
-func New(interval time.Duration) Model {
+// New builds the dashboard model, polling at interval. showMain controls
+// whether each repo's main worktree (Entry.IsMain, e.g. the original
+// checkout you cloned into, as opposed to a linked worktree `wt`/coppice
+// created for a branch) shows up in the view: it's hidden by default,
+// since it's rarely the thing you're switching between and its
+// ever-present "main" branch/clean status added noise to every repo's
+// block without distinguishing anything; pass true to include it.
+func New(interval time.Duration, showMain bool) Model {
 	t := table.New(
 		table.WithColumns(worktreeColumns(0)),
 		table.WithFocused(true),
@@ -108,6 +115,7 @@ func New(interval time.Duration) Model {
 	return Model{
 		interval: interval,
 		home:     homeDir(),
+		showMain: showMain,
 		table:    t,
 	}
 }
@@ -218,15 +226,17 @@ func clampCursor(idx, n int) int {
 // cursor-marker column so the arrow follows immediately rather than
 // waiting for the next poll.
 func (m *Model) refreshCursorMarker() {
-	m.cursor = clampCursor(m.table.Cursor(), len(m.displayedWorktrees()))
-	m.table.SetRows(buildWorktreeRows(m.displayedWorktrees(), m.cursor, m.home, time.Now()))
+	displayed := m.displayedWorktrees()
+	m.cursor = clampCursor(m.table.Cursor(), len(displayed))
+	m.table.SetRows(buildWorktreeRows(displayed, m.cursor, m.home, time.Now(), m.hiddenMain(displayed)))
 }
 
 // resize rebuilds columns (Path's width depends on m.width) and rows for
 // the new terminal width, preserving whatever the live cursor currently
 // is.
 func (m *Model) resize() {
-	cursor := clampCursor(m.table.Cursor(), len(m.displayedWorktrees()))
+	displayed := m.displayedWorktrees()
+	cursor := clampCursor(m.table.Cursor(), len(displayed))
 	m.cursor = cursor
 	// Clear rows before changing columns: bubbles/table re-renders
 	// immediately on both SetColumns and SetRows against whatever's
@@ -234,7 +244,7 @@ func (m *Model) resize() {
 	// match panics if the two are ever briefly out of sync mid-update.
 	m.table.SetRows(nil)
 	m.table.SetColumns(worktreeColumns(m.width))
-	m.table.SetRows(buildWorktreeRows(m.displayedWorktrees(), cursor, m.home, time.Now()))
+	m.table.SetRows(buildWorktreeRows(displayed, cursor, m.home, time.Now(), m.hiddenMain(displayed)))
 	m.table.SetCursor(cursor)
 }
 
@@ -245,7 +255,7 @@ func (m Model) View() string {
 	}
 
 	header := titleStyle.Render("understory") + subtleStyle.Render(" — worktrees on this machine")
-	if summary := worktreeSummaryLine(m.worktrees); summary != "" {
+	if summary := worktreeSummaryLine(m.displayedWorktrees()); summary != "" {
 		header += "\n" + summary
 	}
 
@@ -262,9 +272,10 @@ func (m Model) View() string {
 	return header + "\n\n" + tableView + "\n\n" + footer + "\n"
 }
 
-// Run starts the dashboard program and blocks until the user quits.
-func Run(interval time.Duration) error {
-	p := tea.NewProgram(New(interval), tea.WithAltScreen())
+// Run starts the dashboard program and blocks until the user quits. See
+// New's doc for what showMain controls.
+func Run(interval time.Duration, showMain bool) error {
+	p := tea.NewProgram(New(interval, showMain), tea.WithAltScreen())
 	_, err := p.Run()
 	return err
 }

@@ -84,6 +84,12 @@ already listed, so the view isn't empty by default for a repo that's
 never gone through `wt`/coppice. Requires `wt` on PATH for any data at
 all; without it, understory says so instead of showing an empty list.
 
+Each repo's main worktree (the original checkout, as opposed to a linked
+worktree `wt`/coppice created for a branch) is hidden by default: it's
+rarely the thing you're switching between, and its ever-present "main"
+branch and clean status just added noise to every repo's block. Pass
+`--show-main` to include it.
+
 ## What this deliberately doesn't do
 
 There's no notion of "live" (an agent currently working inside a given

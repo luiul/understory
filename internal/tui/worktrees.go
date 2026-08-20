@@ -102,9 +102,26 @@ func sortWorktrees(worktrees []worktree.Entry) []worktree.Entry {
 
 // displayedWorktrees is the view's current row set: every known
 // worktree, grouped by repo and most-recently-committed first (see
-// sortWorktrees).
+// sortWorktrees), minus each repo's main worktree (see New's doc on
+// showMain) unless m.showMain opted back in.
 func (m Model) displayedWorktrees() []worktree.Entry {
-	return sortWorktrees(m.worktrees)
+	worktrees := m.worktrees
+	if !m.showMain {
+		worktrees = filterOutMain(worktrees)
+	}
+	return sortWorktrees(worktrees)
+}
+
+// filterOutMain returns worktrees minus every entry with IsMain set,
+// preserving order. Does not mutate worktrees.
+func filterOutMain(worktrees []worktree.Entry) []worktree.Entry {
+	filtered := make([]worktree.Entry, 0, len(worktrees))
+	for _, w := range worktrees {
+		if !w.IsMain {
+			filtered = append(filtered, w)
+		}
+	}
+	return filtered
 }
 
 // resolveWorktreeCursor finds path's index in displayed, or falls back to
@@ -139,7 +156,7 @@ func (m *Model) applyWorktrees(fresh []worktree.Entry) {
 	newDisplayed := m.displayedWorktrees()
 	m.cursor = resolveWorktreeCursor(newDisplayed, previousPath, oldCursor)
 
-	m.table.SetRows(buildWorktreeRows(newDisplayed, m.cursor, m.home, time.Now()))
+	m.table.SetRows(buildWorktreeRows(newDisplayed, m.cursor, m.home, time.Now(), m.hiddenMain(newDisplayed)))
 	m.table.SetCursor(m.cursor)
 }
 
@@ -158,9 +175,19 @@ func (m Model) selectedWorktree() (worktree.Entry, bool) {
 	return displayed[idx], true
 }
 
+// hiddenMain reports whether displayed is empty only because every known
+// worktree is a filtered-out main one (see displayedWorktrees), as
+// opposed to there genuinely being none at all: buildWorktreeRows uses
+// this to point at --show-main instead of the generic empty-registry
+// message.
+func (m Model) hiddenMain(displayed []worktree.Entry) bool {
+	return !m.showMain && len(m.worktrees) > 0 && len(displayed) == 0
+}
+
 // buildWorktreeRows constructs the view's rows from an already-sorted
 // (see sortWorktrees) worktree list. cursor picks which row's leading
-// cell carries cursorMarker.
+// cell carries cursorMarker. hiddenMain (see Model.hiddenMain) selects
+// which placeholder message to show when worktrees is empty.
 //
 // The Repo cell is only printed on the first row of each repo's block:
 // sortWorktrees already guarantees every worktree of the same repo is
@@ -176,9 +203,9 @@ func (m Model) selectedWorktree() (worktree.Entry, bool) {
 // the same two plain-word signals coppice's own worktree table shows:
 // whether the working tree itself is dirty/clean/stale, and separately
 // whether the branch has been merged into main yet.
-func buildWorktreeRows(worktrees []worktree.Entry, cursor int, home string, now time.Time) []table.Row {
+func buildWorktreeRows(worktrees []worktree.Entry, cursor int, home string, now time.Time, hiddenMain bool) []table.Row {
 	if len(worktrees) == 0 {
-		return []table.Row{{"", "", "", "", "", "", noWorktreesMessage()}}
+		return []table.Row{{"", "", "", "", "", "", noWorktreesMessage(hiddenMain)}}
 	}
 
 	rows := make([]table.Row, len(worktrees))
@@ -236,11 +263,15 @@ func repoLabel(w worktree.Entry) string {
 }
 
 // noWorktreesMessage distinguishes "wt (worktrunk) isn't installed" (a
-// setup gap, worth naming) from "no worktrees found yet" (e.g. the poll
-// just hasn't landed).
-func noWorktreesMessage() string {
+// setup gap, worth naming), "no worktrees found yet" (e.g. the poll just
+// hasn't landed), and "every known worktree is a hidden main one" (the
+// registry isn't empty, --show-main would reveal them) from each other.
+func noWorktreesMessage(hiddenMain bool) string {
 	if !worktree.Available() {
 		return "wt (worktrunk) is not installed; see https://worktrunk.dev"
+	}
+	if hiddenMain {
+		return "no worktrees to show (pass --show-main to include each repo's main worktree)"
 	}
 	return "no known worktrees (registered in ~/.cache/wt/known-repos, or the repo you're standing in)"
 }

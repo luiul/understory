@@ -12,7 +12,7 @@ import (
 
 func TestEnterOnARowOpensTheSelectedWorktree(t *testing.T) {
 	target := wtEntry("/w/target", "feature", 0)
-	m := New(999)
+	m := New(999, false)
 	m.applyWorktrees([]worktree.Entry{target})
 	m.table.SetCursor(0)
 
@@ -29,14 +29,14 @@ func TestEnterOnARowOpensTheSelectedWorktree(t *testing.T) {
 }
 
 func TestEnterCmdIsNilWhenNothingIsSelected(t *testing.T) {
-	m := New(999)
+	m := New(999, false)
 	if cmd := m.enterCmd(); cmd != nil {
 		t.Fatal("want no command when the placeholder row is showing")
 	}
 }
 
 func TestOpenResultMsgSetsNotificationAndSchedulesClear(t *testing.T) {
-	m := New(999)
+	m := New(999, false)
 	updated, cmd := m.Update(openResultMsg{result: vscode.Result{OK: true, Message: "Focused VS Code window."}})
 	mm := updated.(Model)
 
@@ -57,7 +57,7 @@ func TestOpenResultMsgSetsNotificationAndSchedulesClear(t *testing.T) {
 }
 
 func TestStaleClearNotifyMsgIsIgnored(t *testing.T) {
-	m := New(999)
+	m := New(999, false)
 	updated, _ := m.Update(openResultMsg{result: vscode.Result{OK: false, Message: "nope"}})
 	mm := updated.(Model)
 
@@ -68,7 +68,7 @@ func TestStaleClearNotifyMsgIsIgnored(t *testing.T) {
 }
 
 func TestQuitKeyStopsTheProgram(t *testing.T) {
-	m := New(999)
+	m := New(999, false)
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
 	if !updated.(Model).quitting {
 		t.Fatal("want quitting=true after q")
@@ -95,7 +95,7 @@ func TestShortenHomeReplacesTheHomePrefixWithATilde(t *testing.T) {
 }
 
 func TestCursorMarkerFollowsArrowKeysBetweenPolls(t *testing.T) {
-	m := New(999)
+	m := New(999, false)
 	m.applyWorktrees([]worktree.Entry{wtEntry("/w/a", "a", time.Minute), wtEntry("/w/b", "b", 2*time.Minute)})
 	if got := m.table.Rows()[0][0]; got != cursorMarker {
 		t.Fatalf("got %q, want the marker on row 0 right after applyWorktrees", got)
@@ -114,7 +114,7 @@ func TestCursorMarkerFollowsArrowKeysBetweenPolls(t *testing.T) {
 }
 
 func TestRKeyTriggersAPoll(t *testing.T) {
-	m := New(999)
+	m := New(999, false)
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
 	if cmd == nil {
 		t.Fatal("want r to return a poll command")

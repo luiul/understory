@@ -73,7 +73,7 @@ func TestSortWorktreesOrdersGroupsByTheirOwnMostRecentCommit(t *testing.T) {
 }
 
 func TestDisplayedWorktreesReturnsEveryKnownWorktree(t *testing.T) {
-	m := New(999)
+	m := New(999, false)
 	m.worktrees = []worktree.Entry{wtEntry("/w/a", "a", time.Hour), wtEntry("/w/b", "b", time.Minute)}
 
 	got := m.displayedWorktrees()
@@ -83,8 +83,36 @@ func TestDisplayedWorktreesReturnsEveryKnownWorktree(t *testing.T) {
 	}
 }
 
+func mainEntry(path, branch string, commitAge time.Duration) worktree.Entry {
+	e := wtEntry(path, branch, commitAge)
+	e.IsMain = true
+	return e
+}
+
+func TestDisplayedWorktreesHidesMainWorktreesByDefault(t *testing.T) {
+	m := New(999, false)
+	m.worktrees = []worktree.Entry{mainEntry("/w/main", "main", time.Hour), wtEntry("/w/feature", "feature", time.Minute)}
+
+	got := m.displayedWorktrees()
+
+	if len(got) != 1 || got[0].Path != "/w/feature" {
+		t.Fatalf("got %+v, want only the non-main worktree", got)
+	}
+}
+
+func TestDisplayedWorktreesIncludesMainWorktreesWhenShowMainIsSet(t *testing.T) {
+	m := New(999, true)
+	m.worktrees = []worktree.Entry{mainEntry("/w/main", "main", time.Hour), wtEntry("/w/feature", "feature", time.Minute)}
+
+	got := m.displayedWorktrees()
+
+	if len(got) != 2 {
+		t.Fatalf("got %d worktrees, want 2 (both, showMain=true)", len(got))
+	}
+}
+
 func TestApplyWorktreesKeepsThePreviouslySelectedPathSelected(t *testing.T) {
-	m := New(999)
+	m := New(999, false)
 	m.applyWorktrees([]worktree.Entry{wtEntry("/w/a", "a", time.Hour), wtEntry("/w/b", "b", time.Minute)})
 	m.table.SetCursor(1) // select /w/b (most recently committed, so index 0... adjust below)
 
@@ -109,7 +137,7 @@ func TestApplyWorktreesKeepsThePreviouslySelectedPathSelected(t *testing.T) {
 }
 
 func TestBuildWorktreeRowsPlaceholderWhenEmpty(t *testing.T) {
-	rows := buildWorktreeRows(nil, 0, "", time.Now())
+	rows := buildWorktreeRows(nil, 0, "", time.Now(), false)
 	if len(rows) != 1 {
 		t.Fatalf("got %d rows, want 1 placeholder row", len(rows))
 	}
@@ -118,8 +146,34 @@ func TestBuildWorktreeRowsPlaceholderWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestBuildWorktreeRowsHintsAtShowMainWhenEverythingIsHiddenMain(t *testing.T) {
+	rows := buildWorktreeRows(nil, 0, "", time.Now(), true)
+	if !strings.Contains(rows[0][6], "--show-main") {
+		t.Fatalf("got %q, want a --show-main hint when hiddenMain is true", rows[0][6])
+	}
+}
+
+func TestModelHiddenMainOnlyWhenFilteringEmptiedANonEmptyList(t *testing.T) {
+	m := New(999, false)
+	m.worktrees = []worktree.Entry{mainEntry("/w/main", "main", 0)}
+	if !m.hiddenMain(m.displayedWorktrees()) {
+		t.Fatal("want hiddenMain=true when the only known worktree is a filtered-out main one")
+	}
+
+	m.worktrees = nil
+	if m.hiddenMain(m.displayedWorktrees()) {
+		t.Fatal("want hiddenMain=false when there are genuinely no known worktrees")
+	}
+
+	main := New(999, true)
+	main.worktrees = []worktree.Entry{mainEntry("/w/main", "main", 0)}
+	if main.hiddenMain(main.displayedWorktrees()) {
+		t.Fatal("want hiddenMain=false once showMain is set")
+	}
+}
+
 func TestBuildWorktreeRowsMarksTheCursorRow(t *testing.T) {
-	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), wtEntry("/w/b", "b", 0)}, 1, "", time.Now())
+	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), wtEntry("/w/b", "b", 0)}, 1, "", time.Now(), false)
 	if rows[0][0] != "" || rows[1][0] != cursorMarker {
 		t.Fatalf("got markers %q, %q, want cursor on row 1", rows[0][0], rows[1][0])
 	}
@@ -129,7 +183,7 @@ func TestBuildWorktreeRowsBlanksTheRepeatedRepoLabelWithinAGroup(t *testing.T) {
 	// Same repo (acme/widgets) back to back: only the first row should
 	// carry the label, so the group reads as one block instead of
 	// repeating the same text down every row.
-	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), wtEntry("/w/b", "b", time.Hour)}, 0, "", time.Now())
+	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), wtEntry("/w/b", "b", time.Hour)}, 0, "", time.Now(), false)
 	if rows[0][1] != "acme/widgets" {
 		t.Fatalf("got %q, want the first row of a group to carry its repo label", rows[0][1])
 	}
@@ -139,7 +193,7 @@ func TestBuildWorktreeRowsBlanksTheRepeatedRepoLabelWithinAGroup(t *testing.T) {
 }
 
 func TestBuildWorktreeRowsRelabelsWhenTheRepoChanges(t *testing.T) {
-	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), otherRepoEntry("/w/b", "b", time.Hour)}, 0, "", time.Now())
+	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), otherRepoEntry("/w/b", "b", time.Hour)}, 0, "", time.Now(), false)
 	if rows[0][1] != "acme/widgets" || rows[1][1] != "other/gizmos" {
 		t.Fatalf("got %q, %q, want both distinct repo labels shown", rows[0][1], rows[1][1])
 	}
@@ -176,7 +230,7 @@ func TestBuildWorktreeRowsShowsWorktreeAndMergeColumns(t *testing.T) {
 	w := wtEntry("/w/a", "a", 0)
 	w.Dirty = true
 	w.MergeStatus = worktree.MergeStatusUnmerged
-	rows := buildWorktreeRows([]worktree.Entry{w}, 0, "", time.Now())
+	rows := buildWorktreeRows([]worktree.Entry{w}, 0, "", time.Now(), false)
 	if rows[0][4] != "dirty" {
 		t.Fatalf("got %q, want the Worktree cell to read dirty", rows[0][4])
 	}
