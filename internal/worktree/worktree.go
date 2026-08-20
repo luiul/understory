@@ -1,6 +1,5 @@
 // Package worktree is a thin subprocess wrapper around the `wt`
-// (worktrunk) binary, the same pattern canopy's own internal/herdrclient
-// uses for `herdr`.
+// (worktrunk) binary.
 //
 // understory does not reimplement worktree discovery or status: `wt`
 // already resolves branch/commit/dirty/ahead-behind state correctly
@@ -224,8 +223,7 @@ func parseListOutput(out []byte) ([]Entry, error) {
 // bounded concurrency (see maxConcurrentListCalls). A repo whose
 // ListWorktrees call errors (not `wt`-managed, deleted mid-poll, `wt`
 // itself missing) is silently skipped rather than failing the whole call,
-// the same "one bad source doesn't blank the view" degradation
-// canopy's own internal/herdrclient follows.
+// a graceful-degradation pattern: one bad source doesn't blank the view.
 func ListAll(repoPaths []string) []Entry {
 	if !Available() || len(repoPaths) == 0 {
 		return nil

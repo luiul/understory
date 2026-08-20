@@ -142,7 +142,7 @@ func TestDedupeDropsRepeatsPreservingFirstOccurrenceOrder(t *testing.T) {
 func TestListAllReturnsNilWhenWtIsNotOnPath(t *testing.T) {
 	// This test only asserts the graceful-degradation path that doesn't
 	// need a real `wt` binary: an empty repo list short-circuits before
-	// ever checking Available(), same as herdrclient's "no rows" default.
+	// ever checking Available(), returning an empty set rather than an error.
 	if got := ListAll(nil); got != nil {
 		t.Fatalf("got %+v, want nil for no repo paths", got)
 	}

@@ -36,16 +36,16 @@ flowchart LR
 
 canopy doesn't appear in that diagram: it's fully independent of `wt`'s
 registry and of the other three tools here, discovering agent processes
-directly (`ps`/`lsof`, herdr's own JSON API, AppleScript for Ghostty)
-rather than reading anything worktree-related. It's included in the table
-above because the two dashboards (canopy, understory) are meant to run
-side by side, each a single-view radar over one kind of thing, rather
-than one tool trying to cover both. That's not an accident of scope, it's
-the *reason* this repo exists: understory started as a second view inside
-canopy itself (agent-to-worktree matching, jump-to-worktree), and was
-pulled out into its own tool specifically so canopy's job could stay
-"agent sessions," nothing else, and this one's could stay "worktrees,"
-nothing else. See [What this deliberately doesn't do](#what-this-deliberately-doesnt-do)
+directly via `ps`/`lsof` and AppleScript for Ghostty, rather than reading
+anything worktree-related. It's included in the table above because the
+two dashboards (canopy, understory) are meant to run side by side, each a
+single-view radar over one kind of thing, rather than one tool trying to
+cover both. That's not an accident of scope, it's the *reason* this repo
+exists: understory started as a second view inside canopy itself
+(agent-to-worktree matching, jump-to-worktree), and was pulled out into
+its own tool specifically so canopy's job could stay "agent sessions,"
+nothing else, and this one's could stay "worktrees," nothing else. See
+[What this deliberately doesn't do](#what-this-deliberately-doesnt-do)
 for the one piece of that old view intentionally not carried over.
 
 ## What it looks like
@@ -105,8 +105,7 @@ dashboard.
 
 ## Architecture
 
-- `internal/worktree`: shells out to `wt list --format json`, the same
-  pattern canopy's own `internal/herdrclient` uses for `herdr`. Reads the
+- `internal/worktree`: shells out to `wt list --format json`. Reads the
   shared `~/.cache/wt/known-repos` registry (read only) to find every repo
   to ask about.
 - `internal/vscode`: opens or focuses a VS Code window on a plain path.
