@@ -72,6 +72,21 @@ type Entry struct {
 	// Dirty is true if the worktree has any staged, modified, untracked,
 	// renamed, or deleted change relative to its own HEAD.
 	Dirty bool
+	// Stale is true when `wt` reports this worktree's state as "prunable":
+	// its administrative git metadata still exists, but the working
+	// directory itself is gone (deleted by hand, moved, an OS temp dir
+	// reaped, ...). Nothing else about it (Dirty, MergeStatus, Path) is
+	// meaningful once that's true; it's purely a removal candidate.
+	Stale bool
+	// MergeStatus is this branch's relationship to the repo's main branch,
+	// mirroring coppice's own merge-status derivation: MergeStatusMerged
+	// once `wt`'s main_state reports "empty" or "integrated" (nothing left
+	// to merge), MergeStatusUnmerged once it reports "ahead" (still has
+	// commits main doesn't), MergeStatusUnknown for anything else `wt`
+	// might report, and "" (not applicable) for the main worktree itself
+	// (nothing to merge it into) or a Stale one (its relationship to main
+	// is moot once the worktree directory is already gone).
+	MergeStatus string
 	// Symbols is wt's own compact status glyph string (dirty/ahead/behind,
 	// e.g. "!^|"), reused as-is rather than re-deriving ahead/behind
 	// semantics here: those differ for a main worktree (vs. its remote)
@@ -79,6 +94,14 @@ type Entry struct {
 	// that correctly.
 	Symbols string
 }
+
+// MergeStatus values for Entry.MergeStatus. The zero value ("") means
+// "not applicable" (see Entry.MergeStatus's doc).
+const (
+	MergeStatusMerged   = "merged"
+	MergeStatusUnmerged = "unmerged"
+	MergeStatusUnknown  = "unknown"
+)
 
 // KnownRepoPaths returns every repo understory knows to look for
 // worktrees in: every path listed in the shared `~/.cache/wt/known-repos`
@@ -158,7 +181,21 @@ type rawEntry struct {
 		Owner string `json:"owner"`
 		Name  string `json:"name"`
 	} `json:"repo"`
-	Symbols string `json:"symbols"`
+	// Worktree.State surfaces `wt`'s own "prunable" designation (see
+	// Entry.Stale); every other worktree state it might report (e.g.
+	// "branch_worktree_mismatch", seen on a detached/mismatched checkout)
+	// is intentionally left unparsed, understory has no use for it yet.
+	Worktree struct {
+		State string `json:"state"`
+	} `json:"worktree"`
+	// MainState is `wt`'s own assessment of this branch's relationship to
+	// the repo's main branch ("empty"/"integrated"/"ahead"/...), reused to
+	// derive Entry.MergeStatus rather than re-deriving that relationship
+	// from raw commit/ref data ourselves: main vs. remote-tracking
+	// semantics differ subtly enough (see worktree.go's package doc) that
+	// `wt` having already resolved it correctly is worth deferring to.
+	MainState string `json:"main_state"`
+	Symbols   string `json:"symbols"`
 }
 
 // ListWorktrees returns every worktree of the repo rooted at repoPath, or
@@ -178,7 +215,34 @@ func ListWorktrees(repoPath string) ([]Entry, error) {
 	if err != nil {
 		return nil, err
 	}
-	return parseListOutput(out)
+	entries, err := parseListOutput(out)
+	if err != nil {
+		return nil, err
+	}
+	applyRepoFallback(entries, repoPath)
+	return entries, nil
+}
+
+// applyRepoFallback fills in Repo (mutating entries in place) for any
+// entry `wt` couldn't attribute to an owner/name, using the basename of
+// repoPath (the repo root ListWorktrees queried) instead.
+//
+// `wt list --format json` only includes a `repo` object when the repo
+// has a configured remote it can derive an owner/name from (see its
+// `repo_url` field); a local-only repo (no remote, e.g. a scratch clone
+// under a tmp dir) omits that key entirely, leaving Entry.Owner and
+// Entry.Repo both "". Every such repo then rendered as the same blank
+// label, so distinct remoteless repos were visually indistinguishable
+// (and effectively ungrouped) in understory's Repo column. Falling back
+// to the repo root's directory name at least gives each one a distinct,
+// stable label, consistent across every worktree of that same repo.
+func applyRepoFallback(entries []Entry, repoPath string) {
+	fallback := filepath.Base(filepath.Clean(repoPath))
+	for i := range entries {
+		if entries[i].Owner == "" && entries[i].Repo == "" {
+			entries[i].Repo = fallback
+		}
+	}
 }
 
 // parseListOutput is the pure parsing logic for `wt list --format json`'s
@@ -203,20 +267,39 @@ func parseListOutput(out []byte) ([]Entry, error) {
 	entries := make([]Entry, len(raw))
 	for i, r := range raw {
 		wt := r.WorkingTree
+		stale := r.Worktree.State == "prunable"
 		entries[i] = Entry{
-			Owner:      r.Repo.Owner,
-			Repo:       r.Repo.Name,
-			Branch:     r.Branch,
-			Path:       r.Path,
-			IsMain:     r.IsMain,
-			CommitSHA:  r.Commit.ShortSHA,
-			CommitMsg:  r.Commit.Message,
-			CommitTime: time.Unix(r.Commit.Timestamp, 0),
-			Dirty:      wt.Staged || wt.Modified || wt.Untracked || wt.Renamed || wt.Deleted,
-			Symbols:    r.Symbols,
+			Owner:       r.Repo.Owner,
+			Repo:        r.Repo.Name,
+			Branch:      r.Branch,
+			Path:        r.Path,
+			IsMain:      r.IsMain,
+			CommitSHA:   r.Commit.ShortSHA,
+			CommitMsg:   r.Commit.Message,
+			CommitTime:  time.Unix(r.Commit.Timestamp, 0),
+			Dirty:       wt.Staged || wt.Modified || wt.Untracked || wt.Renamed || wt.Deleted,
+			Stale:       stale,
+			MergeStatus: mergeStatus(r.IsMain, stale, r.MainState),
+			Symbols:     r.Symbols,
 		}
 	}
 	return entries, nil
+}
+
+// mergeStatus derives Entry.MergeStatus from `wt`'s own reporting: see
+// Entry.MergeStatus's doc for what each value means and when it applies.
+func mergeStatus(isMain, stale bool, mainState string) string {
+	if isMain || stale {
+		return ""
+	}
+	switch mainState {
+	case "empty", "integrated":
+		return MergeStatusMerged
+	case "ahead":
+		return MergeStatusUnmerged
+	default:
+		return MergeStatusUnknown
+	}
 }
 
 // ListAll returns every worktree of every repo in repoPaths, run with

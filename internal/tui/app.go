@@ -258,7 +258,8 @@ func (m Model) View() string {
 		footer = style.Render(m.notification)
 	}
 
-	return header + "\n\n" + m.table.View() + "\n\n" + footer + "\n"
+	tableView := colorizeRows(m.table.View(), m.table.Columns(), colWorktree, colMerge)
+	return header + "\n\n" + tableView + "\n\n" + footer + "\n"
 }
 
 // Run starts the dashboard program and blocks until the user quits.

@@ -28,16 +28,17 @@ func TestParseListOutputMapsFieldsAndComputesDirty(t *testing.T) {
 
 	got := entries[0]
 	want := Entry{
-		Owner:      "hellofresh",
-		Repo:       "tardis-community",
-		Branch:     "add-sku-category",
-		Path:       "/Users/x/worktrees/hellofresh/add-sku-category/tardis-community",
-		IsMain:     false,
-		CommitSHA:  "14ae2d8",
-		CommitMsg:  "union topics",
-		CommitTime: time.Unix(1787217791, 0),
-		Dirty:      true,
-		Symbols:    "^⚑",
+		Owner:       "hellofresh",
+		Repo:        "tardis-community",
+		Branch:      "add-sku-category",
+		Path:        "/Users/x/worktrees/hellofresh/add-sku-category/tardis-community",
+		IsMain:      false,
+		CommitSHA:   "14ae2d8",
+		CommitMsg:   "union topics",
+		CommitTime:  time.Unix(1787217791, 0),
+		Dirty:       true,
+		MergeStatus: MergeStatusUnknown, // no "main_state" in this fixture: falls back to unknown
+		Symbols:     "^⚑",
 	}
 	if got != want {
 		t.Fatalf("got %+v, want %+v", got, want)
@@ -123,6 +124,83 @@ func TestParseListOutputMultipleWorktrees(t *testing.T) {
 	}
 	if entries[0].IsMain != true || entries[1].IsMain != false {
 		t.Fatalf("got %+v, want first entry main and second not", entries)
+	}
+}
+
+func TestParseListOutputMarksAPrunableWorktreeStale(t *testing.T) {
+	raw := []byte(`[{"branch": "gone", "path": "/gone", "commit": {"timestamp": 0}, "working_tree": {}, "repo": {}, "worktree": {"state": "prunable"}}]`)
+	entries, err := parseListOutput(raw)
+	if err != nil {
+		t.Fatalf("got err %v", err)
+	}
+	if len(entries) != 1 || !entries[0].Stale {
+		t.Fatalf("got %+v, want Stale=true for a prunable worktree", entries)
+	}
+}
+
+func TestParseListOutputNonPrunableWorktreeIsNotStale(t *testing.T) {
+	raw := []byte(`[{"branch": "b", "path": "/p", "commit": {"timestamp": 0}, "working_tree": {}, "repo": {}, "worktree": {"state": "branch_worktree_mismatch"}}]`)
+	entries, err := parseListOutput(raw)
+	if err != nil {
+		t.Fatalf("got err %v", err)
+	}
+	if len(entries) != 1 || entries[0].Stale {
+		t.Fatalf("got %+v, want Stale=false for a non-prunable worktree state", entries)
+	}
+}
+
+func TestMergeStatusMirrorsMainStateForAnOrdinaryWorktree(t *testing.T) {
+	cases := []struct {
+		mainState string
+		want      string
+	}{
+		{"empty", MergeStatusMerged},
+		{"integrated", MergeStatusMerged},
+		{"ahead", MergeStatusUnmerged},
+		{"diverged", MergeStatusUnknown},
+		{"", MergeStatusUnknown},
+	}
+	for _, c := range cases {
+		if got := mergeStatus(false, false, c.mainState); got != c.want {
+			t.Errorf("mergeStatus(false, false, %q) = %q, want %q", c.mainState, got, c.want)
+		}
+	}
+}
+
+func TestMergeStatusIsNotApplicableForMainOrStale(t *testing.T) {
+	if got := mergeStatus(true, false, "ahead"); got != "" {
+		t.Errorf("mergeStatus(isMain=true) = %q, want \"\" (not applicable to the main worktree)", got)
+	}
+	if got := mergeStatus(false, true, "ahead"); got != "" {
+		t.Errorf("mergeStatus(stale=true) = %q, want \"\" (not applicable once the worktree is gone)", got)
+	}
+}
+
+func TestApplyRepoFallbackFillsRepoOnlyWhenOwnerAndRepoAreBothBlank(t *testing.T) {
+	entries := []Entry{
+		{Branch: "main"},                       // no repo info at all: wants the fallback
+		{Owner: "acme", Branch: "feature"},     // has an owner already: leave alone
+		{Repo: "widgets", Branch: "feature-2"}, // has a repo name already: leave alone
+	}
+	applyRepoFallback(entries, "/private/tmp/wt-clone")
+
+	if got, want := entries[0].Repo, "wt-clone"; got != want {
+		t.Fatalf("got Repo %q, want %q", got, want)
+	}
+	if entries[1].Repo != "" || entries[1].Owner != "acme" {
+		t.Fatalf("got %+v, want owner left untouched and Repo still blank", entries[1])
+	}
+	if entries[2].Repo != "widgets" {
+		t.Fatalf("got %+v, want Repo left untouched", entries[2])
+	}
+}
+
+func TestApplyRepoFallbackUsesRepoPathBasenameEvenWithTrailingSlash(t *testing.T) {
+	entries := []Entry{{Branch: "main"}}
+	applyRepoFallback(entries, "/private/var/folders/x/T/tmp.92EItLcBae/repo/")
+
+	if got, want := entries[0].Repo, "repo"; got != want {
+		t.Fatalf("got Repo %q, want %q", got, want)
 	}
 }
 
