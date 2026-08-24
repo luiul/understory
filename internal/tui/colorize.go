@@ -54,11 +54,16 @@ var mergeStatusStyles = map[string]lipgloss.Style{
 // cursorMarker cell: with rows grouped by repo (see sortWorktrees), most
 // of a block's rows look alike (blank Repo cell, similar Branch/
 // Worktree/Merge text), so a 1-wide marker glyph was easy to lose track
-// of. Reverse video (rather than a fixed background color) swaps
-// whatever foreground/background a terminal already has, so the
-// highlight reads correctly across light and dark terminal themes
-// without understory having to guess one.
-var rowHighlightStyle = lipgloss.NewStyle().Reverse(true)
+// of. A muted grey background band reads as "current row" the way most
+// modern list UIs (editor gutters, lazygit, k9s) already do; the old
+// Reverse(true) full black/white swap worked but read harsher and more
+// dated, and fought a bit with the Worktree/Merge foreground colors
+// nested inside it (see highlightRow) since reversing also inverts
+// *their* colors, not just the row's background. AdaptiveColor picks a
+// shade lighter on a light terminal and a shade darker on a dark one,
+// rather than a single fixed grey that could wash out on one theme or
+// the other.
+var rowHighlightStyle = lipgloss.NewStyle().Background(lipgloss.AdaptiveColor{Light: "254", Dark: "237"})
 
 // worktreeStatusStyle and mergeStatusStyle share coppice's own color
 // choices for the same three/four words ([yellow]dirty[/], [dim]clean[/],
