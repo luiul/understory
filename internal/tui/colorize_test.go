@@ -44,7 +44,7 @@ func TestColorizeRowsAppliesTheWorktreeAndMergeStylesToAnUnselectedRow(t *testin
 	tbl.SetRows([]table.Row{{"clean", "-"}, {"dirty", "unmerged"}})
 	tbl.SetCursor(0) // row 0 selected; row 1 (the one we check) is not
 
-	got := colorizeRows(tbl.View(), tbl.Columns(), -1, 0, 1)
+	got := colorizeRows(tbl.View(), tbl.Columns(), 0, 1)
 
 	wantWorktree := worktreeStatusStyle("dirty").Render("dirty")
 	wantMerge := mergeStatusStyle("unmerged").Render("unmerged")
@@ -59,14 +59,15 @@ func TestColorizeRowsAppliesTheWorktreeAndMergeStylesToAnUnselectedRow(t *testin
 func TestColorizeRowsHighlightsTheWholeCursorRowButNotOthers(t *testing.T) {
 	withForcedColor(t)
 	cols := []table.Column{
-		{Title: "", Width: 1}, // cursor marker
 		{Title: "Worktree", Width: 8},
 		{Title: "Merge", Width: 9},
 	}
 	tbl := table.New(table.WithColumns(cols), table.WithHeight(3))
-	tbl.SetRows([]table.Row{{"", "clean", "-"}, {cursorMarker, "dirty", "unmerged"}})
+	// Row 1 gets the sentinel prepended to its Merge cell to mark it as the
+	// selected row (simulating what buildWorktreeRows would do to colUpdated).
+	tbl.SetRows([]table.Row{{"clean", "-"}, {"dirty", cursorSentinel + "unmerged"}})
 
-	got := colorizeRows(tbl.View(), tbl.Columns(), 0, 1, 2)
+	got := colorizeRows(tbl.View(), tbl.Columns(), 0, 1)
 	lines := strings.Split(got, "\n")
 
 	open, closeSeq := styleSequences(rowHighlightStyle)
@@ -88,6 +89,11 @@ func TestColorizeRowsHighlightsTheWholeCursorRowButNotOthers(t *testing.T) {
 	wantWorktree := worktreeStatusStyle("dirty").Render("dirty")
 	if !strings.Contains(lines[2], wantWorktree) {
 		t.Fatalf("got cursor row %q, want it to still contain the styled word %q", lines[2], wantWorktree)
+	}
+	// The sentinel must be stripped from the output before returning, so it
+	// never leaks into a terminal or gets copy-pasted.
+	if strings.Contains(got, cursorSentinel) {
+		t.Fatalf("got output still containing cursorSentinel %q, want it stripped out", got)
 	}
 }
 
@@ -128,16 +134,6 @@ func TestStyleSequencesSplitsOpenAndCloseAroundTheRenderedContent(t *testing.T) 
 	}
 }
 
-func TestIsCursorRowMatchesTheMarkerCellAndIgnoresBlankFiller(t *testing.T) {
-	off := colOffset{start: 1, width: 1}
-	if !isCursorRow(" "+cursorMarker+" clean", off) {
-		t.Fatal("want the marker cell recognized as the cursor row")
-	}
-	if isCursorRow("   clean", off) {
-		t.Fatal("want a blank marker cell not recognized as the cursor row")
-	}
-}
-
 func TestColorizeRowsSkipsALineThatAlreadyCarriesItsOwnAnsi(t *testing.T) {
 	withForcedColor(t)
 	// colorizeRows must leave a line that already contains an escape
@@ -153,7 +149,7 @@ func TestColorizeRowsSkipsALineThatAlreadyCarriesItsOwnAnsi(t *testing.T) {
 	preStyled := lipgloss.NewStyle().Reverse(true).Render("dirty    unmerged ")
 	view := "Worktree Merge\n" + preStyled
 
-	got := colorizeRows(view, cols, -1, 0, 1)
+	got := colorizeRows(view, cols, 0, 1)
 
 	if got != view {
 		t.Fatalf("got a modified pre-styled line:\n%q\nwant it unchanged from:\n%q", got, view)
@@ -172,7 +168,7 @@ func TestColorizeRowsLeavesTheHeaderLineUntouched(t *testing.T) {
 	rendered := tbl.View()
 	wantHeaderLine := strings.Split(rendered, "\n")[0] // bold by default, even before colorizeRows
 
-	got := colorizeRows(rendered, tbl.Columns(), -1, 0, 1)
+	got := colorizeRows(rendered, tbl.Columns(), 0, 1)
 	gotHeaderLine := strings.Split(got, "\n")[0]
 
 	if gotHeaderLine != wantHeaderLine {
@@ -208,7 +204,7 @@ func TestColorizeRowsStillColorsAfterAMultiByteRuneInAnEarlierColumn(t *testing.
 	})
 	tbl.SetCursor(0)
 
-	got := colorizeRows(tbl.View(), tbl.Columns(), -1, 1, 2)
+	got := colorizeRows(tbl.View(), tbl.Columns(), 1, 2)
 
 	wantWorktree := worktreeStatusStyle("dirty").Render("dirty")
 	wantMerge := mergeStatusStyle("unmerged").Render("unmerged")

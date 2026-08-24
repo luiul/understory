@@ -34,11 +34,24 @@ const DefaultInterval = 15 * time.Second
 
 const notifyDuration = 4 * time.Second
 
-// cursorMarker is the plain-text glyph shown in the leftmost column of
-// the currently selected row. It replaces bubbles/table's own Selected
-// style (a whole-row background/foreground highlight), kept plain ASCII
-// so buildWorktreeRows never has to reason about display width.
-const cursorMarker = ">"
+// cursorSentinel tags whichever row is currently selected so colorize.go's
+// colorizeRows knows which rendered line to highlight, without a
+// dedicated leading marker column/glyph taking up space in every row
+// (that's what this replaced: a visible ">" that became redundant once
+// the whole row itself is highlighted — see rowHighlightStyle).
+//
+// It's a zero-width Unicode space (U+200B), prepended to the Updated
+// cell's text in buildWorktreeRows: zero width so it never changes any
+// column's padding/truncation math (bubbles/table and runewidth both
+// measure display width, not byte length, so this is invisible to both,
+// verified empirically against runewidth.Truncate/lipgloss.Style.Width),
+// and travels with the row's own data through bubbles/table's internal
+// scrolling exactly like any other cell value would — so colorizeRows
+// doesn't need to know the table's scroll offset (which bubbles/table
+// v1 doesn't expose) to find the right rendered line. colorizeRows
+// strips it back out of the final view before returning, so it never
+// leaks into, say, a copy-pasted terminal selection.
+const cursorSentinel = "\u200b"
 
 var (
 	titleStyle  = lipgloss.NewStyle().Bold(true)
@@ -274,7 +287,7 @@ func (m Model) View() string {
 		footer = style.Render(m.notification)
 	}
 
-	tableView := colorizeRows(m.table.View(), m.table.Columns(), colCursor, colWorktree, colMerge)
+	tableView := colorizeRows(m.table.View(), m.table.Columns(), colWorktree, colMerge)
 	return header + "\n\n" + tableView + "\n\n" + footer + "\n"
 }
 

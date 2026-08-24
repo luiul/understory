@@ -50,19 +50,20 @@ var mergeStatusStyles = map[string]lipgloss.Style{
 	"-":        lipgloss.NewStyle().Foreground(lipgloss.Color("240")), // not applicable (main, or stale)
 }
 
-// rowHighlightStyle marks the entire selected row, not just its leading
-// cursorMarker cell: with rows grouped by repo (see sortWorktrees), most
-// of a block's rows look alike (blank Repo cell, similar Branch/
-// Worktree/Merge text), so a 1-wide marker glyph was easy to lose track
-// of. A muted grey background band reads as "current row" the way most
-// modern list UIs (editor gutters, lazygit, k9s) already do; the old
-// Reverse(true) full black/white swap worked but read harsher and more
-// dated, and fought a bit with the Worktree/Merge foreground colors
-// nested inside it (see highlightRow) since reversing also inverts
-// *their* colors, not just the row's background. AdaptiveColor picks a
-// shade lighter on a light terminal and a shade darker on a dark one,
-// rather than a single fixed grey that could wash out on one theme or
-// the other.
+// rowHighlightStyle marks the entire selected row rather than a leading
+// marker glyph: with rows grouped by repo (see sortWorktrees), most of a
+// block's rows look alike (blank Repo cell, similar Branch/Worktree/
+// Merge text), so a 1-wide marker glyph was easy to lose track of, and
+// once the whole row is highlighted the marker itself becomes redundant
+// (removed; see cursorSentinel in app.go for how the row is identified
+// instead now). A muted grey background band reads as "current row" the
+// way most modern list UIs (editor gutters, lazygit, k9s) already do;
+// full-invert Reverse(true) worked but read harsher and more dated, and
+// fought a bit with the Worktree/Merge foreground colors nested inside
+// it (see highlightRow) since reversing also inverts *their* colors, not
+// just the row's background. AdaptiveColor picks a shade lighter on a
+// light terminal and a shade darker on a dark one, rather than a single
+// fixed grey that could wash out on one theme or the other.
 var rowHighlightStyle = lipgloss.NewStyle().Background(lipgloss.AdaptiveColor{Light: "254", Dark: "237"})
 
 // worktreeStatusStyle and mergeStatusStyle share coppice's own color
@@ -109,32 +110,32 @@ func columnOffsets(cols []table.Column) []colOffset {
 // colorizeRows recolors the Worktree and Merge columns of a table's
 // already rendered view, each cell picking its style from its own word
 // (e.g. "dirty" vs "clean"), and highlights the whole line of whichever
-// row carries the cursor marker (see isCursorRow). cols must be the
-// exact columns the view was rendered with; cursorCol/worktreeCol/
-// mergeCol are indexes into cols. Pass -1 for any column that isn't
-// present (e.g. a table built without a cursor column) to skip it
-// without affecting the others.
+// row carries cursorSentinel (see app.go's doc on it) in one of its
+// cells. cols must be the exact columns the view was rendered with;
+// worktreeCol/mergeCol are indexes into cols.
 //
 // The header line and any line that already contains an escape sequence
 // coming in (from some outer style applied before colorizeRows ever ran)
 // is left untouched entirely: recoloring a sub-span of a line that
 // already carries its own color would inject a reset code that cuts the
 // outer style short for the rest of that line. That guard does not apply
-// between the three steps below for the *same* line, though: Merge and
+// between the steps below for the *same* line, though: Merge and
 // Worktree recoloring only insert bytes into their own disjoint spans,
-// and the row highlight applied last is specifically built (see
+// and the row highlight applied after them is specifically built (see
 // highlightRow) to survive wrapping a line that already contains their
-// escape codes.
-func colorizeRows(view string, cols []table.Column, cursorCol, worktreeCol, mergeCol int) string {
+// escape codes. cursorSentinel itself is stripped out right at the end,
+// once nothing later needs its (zero-width, so harmless either way)
+// presence any more, so it never reaches the terminal.
+func colorizeRows(view string, cols []table.Column, worktreeCol, mergeCol int) string {
 	offsets := columnOffsets(cols)
 	lines := strings.Split(view, "\n")
 	for i, line := range lines {
 		if i == 0 || strings.Contains(line, "\x1b") {
 			continue
 		}
+		isCursor := strings.Contains(line, cursorSentinel)
 		// Rightmost column first: recoloring inserts bytes, which would
 		// shift the start offset of any column to its right if done first.
-		isCursor := cursorCol >= 0 && cursorCol < len(cols) && isCursorRow(line, offsets[cursorCol])
 		if mergeCol >= 0 && mergeCol < len(cols) {
 			line = recolorByWord(line, offsets[mergeCol], mergeStatusStyle)
 		}
@@ -144,25 +145,9 @@ func colorizeRows(view string, cols []table.Column, cursorCol, worktreeCol, merg
 		if isCursor {
 			line = highlightRow(line, rowHighlightStyle)
 		}
-		lines[i] = line
+		lines[i] = strings.ReplaceAll(line, cursorSentinel, "")
 	}
 	return strings.Join(lines, "\n")
-}
-
-// isCursorRow reports whether line's cell at the cursor column (off)
-// holds the cursor marker rather than blank filler. Checked before
-// recolorByWord ever touches worktreeCol/mergeCol: those only insert
-// bytes into their own spans (to the right of the cursor column, see
-// worktrees.go's colCursor/colWorktree/colMerge ordering), so the cursor
-// column's own start offset is unaffected regardless of whether this
-// check runs before or after them.
-func isCursorRow(line string, off colOffset) bool {
-	start := displayColumnToByteOffset(line, off.start)
-	end := displayColumnToByteOffset(line, off.start+off.width)
-	if start >= len(line) || end > len(line) || start > end {
-		return false
-	}
-	return strings.TrimRight(line[start:end], " ") == cursorMarker
 }
 
 // highlightRow wraps the whole of line in style, e.g. rowHighlightStyle,

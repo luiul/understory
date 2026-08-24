@@ -54,12 +54,15 @@ for the one piece of that old view intentionally not carried over.
 understory — worktrees on this machine
 2 worktrees
 
-   Repo                  Branch          Updated   Worktree  Merge      Path
->  luiul/understory      hide-main-wt    12s       dirty     unmerged   ~/worktrees/.../understory
-   hellofresh/isa-orch…  fix-writeback   3d        clean     unmerged   ~/worktrees/.../isa-orchestration
+Repo                  Branch          Updated   Worktree  Merge      Path
+luiul/understory      hide-main-wt    12s       dirty     unmerged   ~/worktrees/.../understory
+hellofresh/isa-orch…  fix-writeback   3d        clean     unmerged   ~/worktrees/.../isa-orchestration
 
 ↑/↓ move · enter open/focus · r refresh · q quit
 ```
+
+(the currently selected row also gets a full-width grey highlight in the
+real terminal output, not shown here since it's just a background color)
 
 Each repo's main worktree (`Entry.IsMain`: the base-branch checkout
 `wt`/coppice created the others alongside, not necessarily a branch named
@@ -69,14 +72,18 @@ take the first row of every repo's block whether or not there's actually
 any work going on there. Pass `--show-main` to include it; a repo with no
 other worktrees at all shows nothing without that flag.
 
-The currently selected row is marked with a `>` in the leftmost column.
-Path shortens a leading home-directory prefix to `~`, same as your shell
-prompt. Repo grows to fit whichever owner/repo label is longest across
-the currently displayed worktrees, rather than a fixed width, so a long
-name is never truncated (unlike Branch, which is fixed-width and can
-still ellipsize). Worktree/Merge are plain-word renderings of `wt`'s own
-compact status glyphs (dirty/ahead/behind), rather than the glyphs
-themselves.
+The currently selected row is highlighted with a subtle grey background
+spanning the full width of the table, rather than a leading marker glyph:
+with rows grouped by repo, most of a block's rows look alike (blank Repo
+cell, similar Branch/Worktree/Merge text), so a highlighted row is much
+easier to keep track of while scrolling than a single character off to
+the side. Path shortens a leading home-directory prefix to `~`, same as
+your shell prompt. Repo grows to fit whichever owner/repo label is
+longest across the currently displayed worktrees, rather than a fixed
+width, so a long name is never truncated (unlike Branch, which is
+fixed-width and can still ellipsize). Worktree/Merge are plain-word
+renderings of `wt`'s own compact status glyphs (dirty/ahead/behind),
+rather than the glyphs themselves.
 
 Enter opens (or, if a window is already open on that path, focuses) a VS
 Code window there via [`github.com/luiul/mycelium`](https://github.com/luiul/mycelium)'s

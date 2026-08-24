@@ -30,9 +30,11 @@ const (
 // Column indexes into both worktreeColumns' return value and each
 // buildWorktreeRows row, in display order. colorizeRows (see colorize.go)
 // uses colWorktree/colMerge to recolor those two columns post-render.
+// There's no dedicated cursor column: see cursorSentinel's doc (app.go)
+// for how the selected row is identified instead now that the whole row
+// is highlighted (colorize.go) rather than a leading marker glyph.
 const (
-	colCursor = iota
-	colRepo
+	colRepo = iota
 	colBranch
 	colUpdated
 	colWorktree
@@ -63,7 +65,6 @@ func repoColumnWidth(worktrees []worktree.Entry) int {
 // Path fills whatever's left.
 func worktreeColumns(width int, worktrees []worktree.Entry) []table.Column {
 	cols := []table.Column{
-		{Title: "", Width: 1}, // cursorMarker
 		{Title: "Repo", Width: repoColumnWidth(worktrees)},
 		{Title: "Branch", Width: branchColWidth},
 		{Title: "Updated", Width: updatedColWidth},
@@ -207,8 +208,11 @@ func (m Model) selectedWorktree() (worktree.Entry, bool) {
 }
 
 // buildWorktreeRows constructs the view's rows from an already-sorted
-// (see sortWorktrees) worktree list. cursor picks which row's leading
-// cell carries cursorMarker.
+// (see sortWorktrees) worktree list. cursor picks which row gets tagged
+// with cursorSentinel (see app.go's doc on it) so colorize.go's
+// colorizeRows knows to highlight that row's whole line; there's no
+// dedicated cursor column/glyph to place it in any more, now that the
+// row highlight itself is the selection indicator.
 //
 // The Repo cell is only printed on the first row of each repo's block:
 // sortWorktrees already guarantees every worktree of the same repo is
@@ -226,24 +230,32 @@ func (m Model) selectedWorktree() (worktree.Entry, bool) {
 // whether the branch has been merged into main yet.
 func buildWorktreeRows(worktrees []worktree.Entry, cursor int, home string, now time.Time) []table.Row {
 	if len(worktrees) == 0 {
-		return []table.Row{{"", "", "", "", "", "", noWorktreesMessage()}}
+		return []table.Row{{"", "", "", "", "", noWorktreesMessage()}}
 	}
 
 	rows := make([]table.Row, len(worktrees))
 	for i, w := range worktrees {
-		marker := ""
-		if i == cursor {
-			marker = cursorMarker
-		}
 		label := repoLabel(w)
 		if i > 0 && label == repoLabel(worktrees[i-1]) {
 			label = ""
 		}
+		updated := humanizeSince(now.Sub(w.CommitTime))
+		if i == cursor {
+			// Prepended, not appended: bubbles/table truncates a
+			// too-long cell from the tail (runewidth.Truncate keeps the
+			// head + an ellipsis), so a leading zero-width tag always
+			// survives regardless of how long the cell's real content
+			// is, where a trailing one could get truncated away along
+			// with the tail. Updated's own content is always short
+			// (humanizeSince, e.g. "12s"/"3d") and never truncated in
+			// practice, but the tag's placement is written to hold even
+			// if that ever changed.
+			updated = cursorSentinel + updated
+		}
 		rows[i] = table.Row{
-			marker,
 			label,
 			w.Branch,
-			humanizeSince(now.Sub(w.CommitTime)),
+			updated,
 			worktreeStatusLabel(w),
 			mergeStatusLabel(w),
 			shortenHome(w.Path, home),

@@ -144,15 +144,18 @@ func TestBuildWorktreeRowsPlaceholderWhenEmpty(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("got %d rows, want 1 placeholder row", len(rows))
 	}
-	if len(rows[0]) != 7 {
-		t.Fatalf("got %d cells, want 7 to match worktreeColumns", len(rows[0]))
+	if len(rows[0]) != 6 {
+		t.Fatalf("got %d cells, want 6 to match worktreeColumns", len(rows[0]))
 	}
 }
 
-func TestBuildWorktreeRowsMarksTheCursorRow(t *testing.T) {
+func TestBuildWorktreeRowsTagsTheCursorRowsUpdatedCell(t *testing.T) {
 	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), wtEntry("/w/b", "b", 0)}, 1, "", time.Now())
-	if rows[0][0] != "" || rows[1][0] != cursorMarker {
-		t.Fatalf("got markers %q, %q, want cursor on row 1", rows[0][0], rows[1][0])
+	if strings.Contains(rows[0][colUpdated], cursorSentinel) {
+		t.Fatalf("got cursorSentinel on non-cursor row 0's Updated cell %q, want it absent", rows[0][colUpdated])
+	}
+	if !strings.Contains(rows[1][colUpdated], cursorSentinel) {
+		t.Fatalf("got %q, want row 1's Updated cell to carry cursorSentinel (it's the cursor row)", rows[1][colUpdated])
 	}
 }
 
@@ -161,18 +164,18 @@ func TestBuildWorktreeRowsBlanksTheRepeatedRepoLabelWithinAGroup(t *testing.T) {
 	// carry the label, so the group reads as one block instead of
 	// repeating the same text down every row.
 	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), wtEntry("/w/b", "b", time.Hour)}, 0, "", time.Now())
-	if rows[0][1] != "acme/widgets" {
-		t.Fatalf("got %q, want the first row of a group to carry its repo label", rows[0][1])
+	if rows[0][colRepo] != "acme/widgets" {
+		t.Fatalf("got %q, want the first row of a group to carry its repo label", rows[0][colRepo])
 	}
-	if rows[1][1] != "" {
-		t.Fatalf("got %q, want the repeated repo label blanked on the second row", rows[1][1])
+	if rows[1][colRepo] != "" {
+		t.Fatalf("got %q, want the repeated repo label blanked on the second row", rows[1][colRepo])
 	}
 }
 
 func TestBuildWorktreeRowsRelabelsWhenTheRepoChanges(t *testing.T) {
 	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), otherRepoEntry("/w/b", "b", time.Hour)}, 0, "", time.Now())
-	if rows[0][1] != "acme/widgets" || rows[1][1] != "other/gizmos" {
-		t.Fatalf("got %q, %q, want both distinct repo labels shown", rows[0][1], rows[1][1])
+	if rows[0][colRepo] != "acme/widgets" || rows[1][colRepo] != "other/gizmos" {
+		t.Fatalf("got %q, %q, want both distinct repo labels shown", rows[0][colRepo], rows[1][colRepo])
 	}
 }
 

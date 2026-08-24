@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -94,22 +95,22 @@ func TestShortenHomeReplacesTheHomePrefixWithATilde(t *testing.T) {
 	}
 }
 
-func TestCursorMarkerFollowsArrowKeysBetweenPolls(t *testing.T) {
+func TestCursorSentinelFollowsArrowKeysBetweenPolls(t *testing.T) {
 	m := New(999, false)
 	m.applyWorktrees([]worktree.Entry{wtEntry("/w/a", "a", time.Minute), wtEntry("/w/b", "b", 2*time.Minute)})
-	if got := m.table.Rows()[0][0]; got != cursorMarker {
-		t.Fatalf("got %q, want the marker on row 0 right after applyWorktrees", got)
+	if got := m.table.Rows()[0][colUpdated]; !strings.Contains(got, cursorSentinel) {
+		t.Fatalf("got %q, want cursorSentinel on row 0's Updated cell right after applyWorktrees", got)
 	}
 
-	// Moving down (without a poll in between) must move the marker too, not
+	// Moving down (without a poll in between) must move the tag too, not
 	// just bubbles/table's own internal cursor.
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	mm := updated.(Model)
-	if got := mm.table.Rows()[0][0]; got != "" {
-		t.Fatalf("got %q, want row 0's marker cleared after moving down", got)
+	if got := mm.table.Rows()[0][colUpdated]; strings.Contains(got, cursorSentinel) {
+		t.Fatalf("got %q, want row 0's Updated cell cleared of cursorSentinel after moving down", got)
 	}
-	if got := mm.table.Rows()[1][0]; got != cursorMarker {
-		t.Fatalf("got %q, want row 1 to carry the marker after moving down", got)
+	if got := mm.table.Rows()[1][colUpdated]; !strings.Contains(got, cursorSentinel) {
+		t.Fatalf("got %q, want row 1 to carry cursorSentinel after moving down", got)
 	}
 }
 
