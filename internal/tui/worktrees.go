@@ -128,9 +128,26 @@ func sortWorktrees(worktrees []worktree.Entry) []worktree.Entry {
 
 // displayedWorktrees is the view's current row set: every known
 // worktree, grouped by repo and most-recently-committed first (see
-// sortWorktrees).
+// sortWorktrees), with each repo's main worktree (Entry.IsMain, the base
+// branch checkout `wt`/coppice created the others alongside) dropped
+// unless m.showMain is set. Hiding it by default keeps the view focused
+// on the worktrees actually being worked in: main rarely has anything to
+// do (see worktreeSummaryLine/buildWorktreeRows' "-" Merge cell for it),
+// and having it always take the first row of every repo's block was
+// mostly just noise.
 func (m Model) displayedWorktrees() []worktree.Entry {
-	return sortWorktrees(m.worktrees)
+	sorted := sortWorktrees(m.worktrees)
+	if m.showMain {
+		return sorted
+	}
+	filtered := make([]worktree.Entry, 0, len(sorted))
+	for _, w := range sorted {
+		if w.IsMain {
+			continue
+		}
+		filtered = append(filtered, w)
+	}
+	return filtered
 }
 
 // resolveWorktreeCursor finds path's index in displayed, or falls back to

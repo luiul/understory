@@ -52,16 +52,22 @@ for the one piece of that old view intentionally not carried over.
 
 ```
 understory — worktrees on this machine
-6 worktrees
+2 worktrees
 
    Repo                  Branch          Updated   Closed   Worktree  Merge      Path
->  luiul/understory      main            12s                dirty     -          ~/projects/personal/understory
+>  luiul/understory      hide-main-wt    12s                dirty     unmerged   ~/worktrees/.../understory
    hellofresh/isa-orch…  fix-writeback   3d        2m       clean     unmerged   ~/worktrees/.../isa-orchestration
-   luiul/dotfiles        main            1h26m              clean     -          ~/dotfiles
-   ...
 
 ↑/↓ move · enter open/focus · r refresh · q quit
 ```
+
+Each repo's main worktree (`Entry.IsMain`: the base-branch checkout
+`wt`/coppice created the others alongside, not necessarily a branch named
+"main") is hidden by default, since it rarely has anything to do (its
+Merge column is always `-`, nothing to merge it into) and would otherwise
+take the first row of every repo's block whether or not there's actually
+any work going on there. Pass `--show-main` to include it; a repo with no
+other worktrees at all shows nothing without that flag.
 
 The currently selected row is marked with a `>` in the leftmost column.
 Path shortens a leading home-directory prefix to `~`, same as your shell

@@ -73,7 +73,7 @@ func TestSortWorktreesOrdersGroupsByTheirOwnMostRecentCommit(t *testing.T) {
 }
 
 func TestDisplayedWorktreesReturnsEveryKnownWorktree(t *testing.T) {
-	m := New(999)
+	m := New(999, false)
 	m.worktrees = []worktree.Entry{wtEntry("/w/a", "a", time.Hour), wtEntry("/w/b", "b", time.Minute)}
 
 	got := m.displayedWorktrees()
@@ -83,8 +83,39 @@ func TestDisplayedWorktreesReturnsEveryKnownWorktree(t *testing.T) {
 	}
 }
 
+func TestDisplayedWorktreesHidesMainByDefault(t *testing.T) {
+	main := wtEntry("/w/main", "main", time.Hour)
+	main.IsMain = true
+	branch := wtEntry("/w/branch", "feature", time.Minute)
+
+	m := New(999, false)
+	m.worktrees = []worktree.Entry{main, branch}
+
+	got := m.displayedWorktrees()
+
+	want := []string{"/w/branch"}
+	if strings.Join(pathsOf(got), ",") != strings.Join(want, ",") {
+		t.Fatalf("got %v, want %v (main worktree hidden)", pathsOf(got), want)
+	}
+}
+
+func TestDisplayedWorktreesShowsMainWhenRequested(t *testing.T) {
+	main := wtEntry("/w/main", "main", time.Hour)
+	main.IsMain = true
+	branch := wtEntry("/w/branch", "feature", time.Minute)
+
+	m := New(999, true)
+	m.worktrees = []worktree.Entry{main, branch}
+
+	got := m.displayedWorktrees()
+
+	if len(got) != 2 {
+		t.Fatalf("got %d worktrees, want 2 (--show-main should include the main worktree)", len(got))
+	}
+}
+
 func TestApplyWorktreesKeepsThePreviouslySelectedPathSelected(t *testing.T) {
-	m := New(999)
+	m := New(999, false)
 	m.applyWorktrees([]worktree.Entry{wtEntry("/w/a", "a", time.Hour), wtEntry("/w/b", "b", time.Minute)})
 	m.table.SetCursor(1) // select /w/b (most recently committed, so index 0... adjust below)
 

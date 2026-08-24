@@ -87,6 +87,9 @@ type clearNotifyMsg struct{ token int }
 type Model struct {
 	interval time.Duration
 	home     string
+	// showMain, when false (the default), drops each repo's main worktree
+	// (Entry.IsMain) from displayedWorktrees; see that method's doc for why.
+	showMain bool
 
 	worktrees []worktree.Entry // every known worktree, raw (unsorted) from the last successful poll
 	cursor    int              // remembers selection by-path across polls; table.Cursor() is the live ground truth while running
@@ -109,8 +112,10 @@ type Model struct {
 	quitting      bool
 }
 
-// New builds the dashboard model, polling at interval.
-func New(interval time.Duration) Model {
+// New builds the dashboard model, polling at interval. showMain controls
+// whether each repo's main worktree (Entry.IsMain) is included in the
+// view; see displayedWorktrees' doc.
+func New(interval time.Duration, showMain bool) Model {
 	t := table.New(
 		table.WithColumns(worktreeColumns(0, nil)),
 		table.WithFocused(true),
@@ -123,6 +128,7 @@ func New(interval time.Duration) Model {
 	return Model{
 		interval: interval,
 		home:     homeDir(),
+		showMain: showMain,
 		table:    t,
 	}
 }
@@ -300,7 +306,7 @@ func (m Model) View() string {
 	}
 
 	header := titleStyle.Render("understory") + subtleStyle.Render(" — worktrees on this machine")
-	if summary := worktreeSummaryLine(m.worktrees); summary != "" {
+	if summary := worktreeSummaryLine(m.displayedWorktrees()); summary != "" {
 		header += "\n" + summary
 	}
 
@@ -318,8 +324,9 @@ func (m Model) View() string {
 }
 
 // Run starts the dashboard program and blocks until the user quits.
-func Run(interval time.Duration) error {
-	p := tea.NewProgram(New(interval), tea.WithAltScreen())
+// showMain controls whether each repo's main worktree is shown; see New.
+func Run(interval time.Duration, showMain bool) error {
+	p := tea.NewProgram(New(interval, showMain), tea.WithAltScreen())
 	_, err := p.Run()
 	return err
 }

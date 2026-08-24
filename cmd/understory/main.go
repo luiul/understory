@@ -38,6 +38,7 @@ Usage:
 
 Flags:
   --interval <seconds>   Poll interval in seconds (default 15).
+  --show-main            Include each repo's main worktree (hidden by default).
   --no-color             Disable color output (also respects NO_COLOR).
   --version              Show the version and exit.
   -h, --help             Show this help and exit.
@@ -46,6 +47,7 @@ Flags:
 func main() {
 	fs := flag.NewFlagSet("understory", flag.ExitOnError)
 	interval := fs.Float64("interval", tui.DefaultInterval.Seconds(), "Poll interval in seconds.")
+	showMain := fs.Bool("show-main", false, "Include each repo's main worktree (hidden by default).")
 	noColor := fs.Bool("no-color", false, "Disable color output (also respects NO_COLOR).")
 	showVersion := fs.Bool("version", false, "Show the version and exit.")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, helpText) }
@@ -68,7 +70,7 @@ func main() {
 		lipgloss.SetColorProfile(termenv.Ascii)
 	}
 
-	err := tui.Run(time.Duration(*interval * float64(time.Second)))
+	err := tui.Run(time.Duration(*interval*float64(time.Second)), *showMain)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "understory:", err)
 		os.Exit(1)
