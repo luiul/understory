@@ -22,6 +22,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/luiul/loam"
 	"github.com/luiul/mycelium"
 	"github.com/luiul/understory/internal/worktree"
 )
@@ -34,24 +35,13 @@ const DefaultInterval = 15 * time.Second
 
 const notifyDuration = 4 * time.Second
 
-// cursorSentinel tags whichever row is currently selected so colorize.go's
-// colorizeRows knows which rendered line to highlight, without a
-// dedicated leading marker column/glyph taking up space in every row
-// (that's what this replaced: a visible ">" that became redundant once
-// the whole row itself is highlighted — see rowHighlightStyle).
-//
-// It's a zero-width Unicode space (U+200B), prepended to the Updated
-// cell's text in buildWorktreeRows: zero width so it never changes any
-// column's padding/truncation math (bubbles/table and runewidth both
-// measure display width, not byte length, so this is invisible to both,
-// verified empirically against runewidth.Truncate/lipgloss.Style.Width),
-// and travels with the row's own data through bubbles/table's internal
-// scrolling exactly like any other cell value would — so colorizeRows
-// doesn't need to know the table's scroll offset (which bubbles/table
-// v1 doesn't expose) to find the right rendered line. colorizeRows
-// strips it back out of the final view before returning, so it never
-// leaks into, say, a copy-pasted terminal selection.
-const cursorSentinel = "\u200b"
+// cursorSentinel tags whichever row is currently selected; see
+// loam.Sentinel's doc for the mechanism and why it replaced a visible
+// leading marker column/glyph. Aliased locally so the rest of this
+// package (buildWorktreeRows in worktrees.go, this file's own tests)
+// doesn't need to import loam just to reference the same constant
+// colorizeRows (colorize.go) checks for.
+const cursorSentinel = loam.Sentinel
 
 var (
 	titleStyle  = lipgloss.NewStyle().Bold(true)

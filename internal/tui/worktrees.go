@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/mattn/go-runewidth"
 
+	"github.com/luiul/loam"
 	"github.com/luiul/understory/internal/worktree"
 )
 
@@ -30,7 +31,7 @@ const (
 // Column indexes into both worktreeColumns' return value and each
 // buildWorktreeRows row, in display order. colorizeRows (see colorize.go)
 // uses colWorktree/colMerge to recolor those two columns post-render.
-// There's no dedicated cursor column: see cursorSentinel's doc (app.go)
+// There's no dedicated cursor column: see loam.Sentinel's doc (loam pkg)
 // for how the selected row is identified instead now that the whole row
 // is highlighted (colorize.go) rather than a leading marker glyph.
 const (
@@ -209,7 +210,7 @@ func (m Model) selectedWorktree() (worktree.Entry, bool) {
 
 // buildWorktreeRows constructs the view's rows from an already-sorted
 // (see sortWorktrees) worktree list. cursor picks which row gets tagged
-// with cursorSentinel (see app.go's doc on it) so colorize.go's
+// with loam.Sentinel (see loam pkg doc) so colorize.go's
 // colorizeRows knows to highlight that row's whole line; there's no
 // dedicated cursor column/glyph to place it in any more, now that the
 // row highlight itself is the selection indicator.
@@ -250,7 +251,7 @@ func buildWorktreeRows(worktrees []worktree.Entry, cursor int, home string, now 
 			// (humanizeSince, e.g. "12s"/"3d") and never truncated in
 			// practice, but the tag's placement is written to hold even
 			// if that ever changed.
-			updated = cursorSentinel + updated
+			updated = loam.Sentinel + updated
 		}
 		rows[i] = table.Row{
 			label,
