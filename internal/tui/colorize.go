@@ -36,26 +36,6 @@ var mergeStatusStyles = map[string]lipgloss.Style{
 	"-":        lipgloss.NewStyle().Foreground(lipgloss.Color("240")), // not applicable (main, or stale)
 }
 
-// cursorMarkerStyle accents the leading cursor-marker cell (cursorMarker,
-// see app.go) of whichever row is currently selected. Bare, uncolored
-// ">" was too easy to lose track of once rows are grouped by repo (see
-// sortWorktrees): most of a group's rows look alike (blank Repo cell,
-// similar Branch/Worktree/Merge text), leaving a single plain glyph in a
-// 1-wide column as the only distinguishing signal. Cyan/bold doesn't
-// collide with any existing status color (worktreeStatusStyles/
-// mergeStatusStyles only use 9/10/11/240) so it reads as its own
-// "selection" cue rather than another status.
-var cursorMarkerStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("14"))
-
-// cursorMarkerLookupStyle ignores word (the cursor column can only ever
-// hold "" or cursorMarker) and always returns cursorMarkerStyle; it
-// exists only to satisfy recolorByWord's lookup func(string) lipgloss.Style
-// signature — recolorByWord already skips the column when its cell is
-// blank, so this is never actually called for a non-cursor row.
-func cursorMarkerLookupStyle(string) lipgloss.Style {
-	return cursorMarkerStyle
-}
-
 // worktreeStatusStyle and mergeStatusStyle share coppice's own color
 // choices for the same three/four words ([yellow]dirty[/], [dim]clean[/],
 // [green]merged[/], [yellow]unmerged[/], [dim]unknown[/]), so the two
@@ -97,24 +77,20 @@ func columnOffsets(cols []table.Column) []colOffset {
 	return offsets
 }
 
-// colorizeRows recolors the cursor-marker, Worktree, and Merge columns of
-// a table's already rendered view, each cell picking its style from its
-// own word (e.g. "dirty" vs "clean", or cursorMarker itself for the
-// cursor column). cols must be the exact columns the view was rendered
-// with; cursorCol/worktreeCol/mergeCol are indexes into cols. Pass -1 for
-// any column that isn't present (e.g. a table built without a cursor
-// column) to skip recoloring it without affecting the others.
+// colorizeRows recolors the Worktree and Merge columns of a table's
+// already rendered view, each cell picking its style from its own word
+// (e.g. "dirty" vs "clean"). cols must be the exact columns the view was
+// rendered with; worktreeCol/mergeCol are indexes into cols.
 //
 // The header line and any line that already contains an escape sequence
-// (from some outer style applied before colorizeRows ever ran) is left
-// untouched: recoloring a sub-span of a line that already carries its
-// own color would inject a reset code that cuts the outer style short
-// for the rest of that line. This does not apply between the three
-// recolorByWord calls below for the *same* line: each one only inserts
-// bytes into its own column's span, so they compose safely within one
-// pass as long as they're applied right-to-left (see the comment above
-// them).
-func colorizeRows(view string, cols []table.Column, cursorCol, worktreeCol, mergeCol int) string {
+// (only the single currently-selected row, if something ever wraps it
+// whole in its own style again) are left untouched: recoloring a sub-span
+// of a line that already carries its own color would inject a reset code
+// that cuts the outer style short for the rest of that line.
+func colorizeRows(view string, cols []table.Column, worktreeCol, mergeCol int) string {
+	if worktreeCol >= len(cols) || mergeCol >= len(cols) {
+		return view
+	}
 	offsets := columnOffsets(cols)
 	lines := strings.Split(view, "\n")
 	for i, line := range lines {
@@ -123,17 +99,8 @@ func colorizeRows(view string, cols []table.Column, cursorCol, worktreeCol, merg
 		}
 		// Rightmost column first: recoloring inserts bytes, which would
 		// shift the start offset of any column to its right if done first.
-		// cursorCol is always the leftmost of the three (see worktrees.go's
-		// colCursor/colWorktree/colMerge ordering), so it goes last.
-		if mergeCol >= 0 && mergeCol < len(cols) {
-			line = recolorByWord(line, offsets[mergeCol], mergeStatusStyle)
-		}
-		if worktreeCol >= 0 && worktreeCol < len(cols) {
-			line = recolorByWord(line, offsets[worktreeCol], worktreeStatusStyle)
-		}
-		if cursorCol >= 0 && cursorCol < len(cols) {
-			line = recolorByWord(line, offsets[cursorCol], cursorMarkerLookupStyle)
-		}
+		line = recolorByWord(line, offsets[mergeCol], mergeStatusStyle)
+		line = recolorByWord(line, offsets[worktreeCol], worktreeStatusStyle)
 		lines[i] = line
 	}
 	return strings.Join(lines, "\n")

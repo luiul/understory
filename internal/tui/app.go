@@ -37,11 +37,7 @@ const notifyDuration = 4 * time.Second
 // cursorMarker is the plain-text glyph shown in the leftmost column of
 // the currently selected row. It replaces bubbles/table's own Selected
 // style (a whole-row background/foreground highlight), kept plain ASCII
-// so buildWorktreeRows never has to reason about display width; the same
-// post-render technique that colors the Worktree/Merge columns
-// (colorizeRows, see colorize.go) accents this glyph too, rather than
-// baking ANSI into the table.Row value directly (see colorize.go's own
-// package doc for why that's unsafe with bubbles/table's truncation).
+// so buildWorktreeRows never has to reason about display width.
 const cursorMarker = ">"
 
 var (
@@ -273,7 +269,7 @@ func (m Model) View() string {
 		footer = style.Render(m.notification)
 	}
 
-	tableView := colorizeRows(m.table.View(), m.table.Columns(), colCursor, colWorktree, colMerge)
+	tableView := colorizeRows(m.table.View(), m.table.Columns(), colWorktree, colMerge)
 	return header + "\n\n" + tableView + "\n\n" + footer + "\n"
 }
 
