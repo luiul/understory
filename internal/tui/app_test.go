@@ -6,7 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/luiul/understory/internal/vscode"
+	"github.com/luiul/mycelium"
 	"github.com/luiul/understory/internal/worktree"
 )
 
@@ -37,7 +37,7 @@ func TestEnterCmdIsNilWhenNothingIsSelected(t *testing.T) {
 
 func TestOpenResultMsgSetsNotificationAndSchedulesClear(t *testing.T) {
 	m := New(999, false)
-	updated, cmd := m.Update(openResultMsg{result: vscode.Result{OK: true, Message: "Focused VS Code window."}})
+	updated, cmd := m.Update(openResultMsg{result: mycelium.Result{OK: true, Message: "Focused VS Code window."}})
 	mm := updated.(Model)
 
 	if mm.notification != "Focused VS Code window." {
@@ -58,7 +58,7 @@ func TestOpenResultMsgSetsNotificationAndSchedulesClear(t *testing.T) {
 
 func TestStaleClearNotifyMsgIsIgnored(t *testing.T) {
 	m := New(999, false)
-	updated, _ := m.Update(openResultMsg{result: vscode.Result{OK: false, Message: "nope"}})
+	updated, _ := m.Update(openResultMsg{result: mycelium.Result{OK: false, Message: "nope"}})
 	mm := updated.(Model)
 
 	stale, _ := mm.Update(clearNotifyMsg{token: mm.notifyToken - 1})

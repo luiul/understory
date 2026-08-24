@@ -79,17 +79,21 @@ compact status glyphs (dirty/ahead/behind), rather than the glyphs
 themselves.
 
 Enter opens (or, if a window is already open on that path, focuses) a VS
-Code window there. Checks for an already-open window itself first, via
-AppleScript against each window's title, and only forces a brand-new one
-(`-n`) once it knows none is already open: `code --reuse-window` alone
-turns out not to be enough for this, since it silently hijacks whichever
-window was last active instead of opening a fresh one whenever no window
-already has the given path open (confirmed both empirically and in
-upstream reports, e.g. microsoft/vscode#121926) — exactly the case a
-worktree row that's never been opened before hits on every first press.
-Same-row repeated presses stay safe from duplicate windows precisely
-because the already-open check finds that new window on every
-subsequent press.
+Code window there via [`github.com/luiul/mycelium`](https://github.com/luiul/mycelium)'s
+shared open-or-focus logic: it checks for an already-open window itself
+first, via AppleScript against each window's title, and only forces a
+brand-new one (`-n`) once it knows none is already open. `code
+--reuse-window` alone turns out not to be enough for this, since it
+silently hijacks whichever window was last active instead of opening a
+fresh one whenever no window already has the given path open (confirmed
+both empirically and in upstream reports, e.g. microsoft/vscode#121926)
+— exactly the case a worktree row that's never been opened before hits
+on every first press. Same-row repeated presses stay safe from
+duplicate windows precisely because the already-open check finds that
+new window on every subsequent press. canopy uses the exact same
+mycelium package to jump to whichever window is running a given agent,
+so this switch-or-create behavior lives in one shared place instead of
+being duplicated across both tools.
 
 ## Worktree discovery
 
@@ -126,9 +130,11 @@ dashboard.
 - `internal/worktree`: shells out to `wt list --format json`. Reads the
   shared `~/.cache/wt/known-repos` registry (read only) to find every repo
   to ask about.
-- `internal/vscode`: opens or focuses a VS Code window on a plain path.
 - `internal/tui`: the Bubble Tea dashboard (table, polling timer,
-  open-on-Enter, notifications).
+  open-on-Enter via
+  [`github.com/luiul/mycelium`](https://github.com/luiul/mycelium)'s shared
+  open-or-focus logic — the same package canopy uses to jump to whichever
+  window is running a given agent — notifications).
 - `cmd/understory`: the CLI entry point (flags, version).
 
 ## Install

@@ -8,7 +8,9 @@
 // Agents view, and duplicating it here would recouple two tools that are
 // otherwise fully independent. Enter always opens or focuses a VS Code
 // window on the selected worktree's path, the same behavior `wt`'s own
-// post-start hook and coppice already give a freshly created one.
+// post-start hook and coppice already give a freshly created one — via
+// github.com/luiul/mycelium's shared open-or-focus logic, since canopy
+// needs the exact same switch-or-create behavior for its own agent rows.
 package tui
 
 import (
@@ -20,7 +22,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/luiul/understory/internal/vscode"
+	"github.com/luiul/mycelium"
 	"github.com/luiul/understory/internal/worktree"
 )
 
@@ -75,7 +77,7 @@ type tickMsg struct{}
 type pollResultMsg struct {
 	worktrees []worktree.Entry
 }
-type openResultMsg struct{ result vscode.Result }
+type openResultMsg struct{ result mycelium.Result }
 type clearNotifyMsg struct{ token int }
 
 // Model is the bubbletea model backing the dashboard.
@@ -138,7 +140,7 @@ func pollCmd() tea.Cmd {
 
 func openCmd(path string) tea.Cmd {
 	return func() tea.Msg {
-		return openResultMsg{result: vscode.Open(path)}
+		return openResultMsg{result: mycelium.OpenVSCode(path)}
 	}
 }
 
