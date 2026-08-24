@@ -111,6 +111,11 @@ func New(interval time.Duration, showMain bool) Model {
 		table.WithHeight(15),
 	)
 	styles := table.DefaultStyles()
+	// Selected stays empty rather than bubbles/table's own default
+	// highlight: the row highlight understory does show is applied by
+	// colorizeRows (colorize.go) as a post-render pass instead, precisely
+	// so it can layer on top of the Worktree/Merge status coloring rather
+	// than replacing it; see that file's package doc for why.
 	styles.Selected = lipgloss.NewStyle()
 	t.SetStyles(styles)
 
@@ -269,7 +274,7 @@ func (m Model) View() string {
 		footer = style.Render(m.notification)
 	}
 
-	tableView := colorizeRows(m.table.View(), m.table.Columns(), colWorktree, colMerge)
+	tableView := colorizeRows(m.table.View(), m.table.Columns(), colCursor, colWorktree, colMerge)
 	return header + "\n\n" + tableView + "\n\n" + footer + "\n"
 }
 
