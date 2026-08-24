@@ -224,6 +224,14 @@ func (m Model) selectedWorktree() (worktree.Entry, bool) {
 // the same two plain-word signals coppice's own worktree table shows:
 // whether the working tree itself is dirty/clean/stale, and separately
 // whether the branch has been merged into main yet.
+//
+// The cursor row is exempt from the repo-label blanking below: landing
+// the cursor on a repeated (blanked) row inside a repo's block used to
+// mean the one row you're actually looking at was also the one row
+// missing its repo label — exactly the wrong row to go quiet on. Always
+// showing it there costs nothing (only one row per render can be the
+// cursor) and means moving the cursor down a block never loses track of
+// which repo you're in.
 func buildWorktreeRows(worktrees []worktree.Entry, cursor int, home string, now time.Time) []table.Row {
 	if len(worktrees) == 0 {
 		return []table.Row{{"", "", "", "", "", "", noWorktreesMessage()}}
@@ -236,7 +244,7 @@ func buildWorktreeRows(worktrees []worktree.Entry, cursor int, home string, now 
 			marker = cursorMarker
 		}
 		label := repoLabel(w)
-		if i > 0 && label == repoLabel(worktrees[i-1]) {
+		if i > 0 && i != cursor && label == repoLabel(worktrees[i-1]) {
 			label = ""
 		}
 		rows[i] = table.Row{

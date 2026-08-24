@@ -44,7 +44,7 @@ func TestColorizeRowsAppliesTheWorktreeAndMergeStylesToAnUnselectedRow(t *testin
 	tbl.SetRows([]table.Row{{"clean", "-"}, {"dirty", "unmerged"}})
 	tbl.SetCursor(0) // row 0 selected; row 1 (the one we check) is not
 
-	got := colorizeRows(tbl.View(), tbl.Columns(), 0, 1)
+	got := colorizeRows(tbl.View(), tbl.Columns(), -1, 0, 1)
 
 	wantWorktree := worktreeStatusStyle("dirty").Render("dirty")
 	wantMerge := mergeStatusStyle("unmerged").Render("unmerged")
@@ -53,6 +53,46 @@ func TestColorizeRowsAppliesTheWorktreeAndMergeStylesToAnUnselectedRow(t *testin
 	}
 	if !strings.Contains(got, wantMerge) {
 		t.Fatalf("got %q, want it to contain the styled word %q", got, wantMerge)
+	}
+}
+
+func TestColorizeRowsAccentsTheCursorMarkerOnTheSelectedRow(t *testing.T) {
+	withForcedColor(t)
+	cols := []table.Column{
+		{Title: "", Width: 1}, // cursor marker
+		{Title: "Worktree", Width: 8},
+		{Title: "Merge", Width: 9},
+	}
+	tbl := table.New(table.WithColumns(cols), table.WithHeight(3))
+	tbl.SetRows([]table.Row{{"", "clean", "-"}, {cursorMarker, "dirty", "unmerged"}})
+	tbl.SetCursor(0) // table's own cursor is unrelated to the marker cell values we set directly
+
+	got := colorizeRows(tbl.View(), tbl.Columns(), 0, 1, 2)
+
+	want := cursorMarkerStyle.Render(cursorMarker)
+	if !strings.Contains(got, want) {
+		t.Fatalf("got %q, want it to contain the accented marker %q", got, want)
+	}
+}
+
+func TestColorizeRowsLeavesTheCursorColumnAloneWhenPassedMinusOne(t *testing.T) {
+	// -1 means "no cursor column in this table" (see e.g. the tests above
+	// that only pass Worktree/Merge columns); colorizeRows must not panic
+	// or otherwise misbehave when told to skip it.
+	withForcedColor(t)
+	cols := []table.Column{
+		{Title: "", Width: 1},
+		{Title: "Worktree", Width: 8},
+		{Title: "Merge", Width: 9},
+	}
+	tbl := table.New(table.WithColumns(cols), table.WithHeight(3))
+	tbl.SetRows([]table.Row{{cursorMarker, "dirty", "unmerged"}})
+
+	got := colorizeRows(tbl.View(), tbl.Columns(), -1, 1, 2)
+
+	unwanted := cursorMarkerStyle.Render(cursorMarker)
+	if strings.Contains(got, unwanted) {
+		t.Fatalf("got %q, want the cursor column left unaccented when cursorCol is -1", got)
 	}
 }
 
@@ -71,7 +111,7 @@ func TestColorizeRowsSkipsALineThatAlreadyCarriesItsOwnAnsi(t *testing.T) {
 	preStyled := lipgloss.NewStyle().Reverse(true).Render("dirty    unmerged ")
 	view := "Worktree Merge\n" + preStyled
 
-	got := colorizeRows(view, cols, 0, 1)
+	got := colorizeRows(view, cols, -1, 0, 1)
 
 	if got != view {
 		t.Fatalf("got a modified pre-styled line:\n%q\nwant it unchanged from:\n%q", got, view)
@@ -90,7 +130,7 @@ func TestColorizeRowsLeavesTheHeaderLineUntouched(t *testing.T) {
 	rendered := tbl.View()
 	wantHeaderLine := strings.Split(rendered, "\n")[0] // bold by default, even before colorizeRows
 
-	got := colorizeRows(rendered, tbl.Columns(), 0, 1)
+	got := colorizeRows(rendered, tbl.Columns(), -1, 0, 1)
 	gotHeaderLine := strings.Split(got, "\n")[0]
 
 	if gotHeaderLine != wantHeaderLine {
@@ -126,7 +166,7 @@ func TestColorizeRowsStillColorsAfterAMultiByteRuneInAnEarlierColumn(t *testing.
 	})
 	tbl.SetCursor(0)
 
-	got := colorizeRows(tbl.View(), tbl.Columns(), 1, 2)
+	got := colorizeRows(tbl.View(), tbl.Columns(), -1, 1, 2)
 
 	wantWorktree := worktreeStatusStyle("dirty").Render("dirty")
 	wantMerge := mergeStatusStyle("unmerged").Render("unmerged")

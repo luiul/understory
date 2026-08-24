@@ -169,6 +169,16 @@ func TestBuildWorktreeRowsBlanksTheRepeatedRepoLabelWithinAGroup(t *testing.T) {
 	}
 }
 
+func TestBuildWorktreeRowsUnblanksTheRepoLabelOnTheCursorRow(t *testing.T) {
+	// Same repo back to back, but the cursor is on the row that would
+	// otherwise have its label blanked: that row should show its repo
+	// label anyway, since it's the one row you're actually looking at.
+	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), wtEntry("/w/b", "b", time.Hour)}, 1, "", time.Now())
+	if rows[1][1] != "acme/widgets" {
+		t.Fatalf("got %q, want the cursor row to show its repo label even though it repeats the group's", rows[1][1])
+	}
+}
+
 func TestBuildWorktreeRowsRelabelsWhenTheRepoChanges(t *testing.T) {
 	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), otherRepoEntry("/w/b", "b", time.Hour)}, 0, "", time.Now())
 	if rows[0][1] != "acme/widgets" || rows[1][1] != "other/gizmos" {
