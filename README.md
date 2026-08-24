@@ -54,9 +54,9 @@ for the one piece of that old view intentionally not carried over.
 understory — worktrees on this machine
 2 worktrees
 
-   Repo                  Branch          Updated   Closed   Worktree  Merge      Path
->  luiul/understory      hide-main-wt    12s                dirty     unmerged   ~/worktrees/.../understory
-   hellofresh/isa-orch…  fix-writeback   3d        2m       clean     unmerged   ~/worktrees/.../isa-orchestration
+   Repo                  Branch          Updated   Worktree  Merge      Path
+>  luiul/understory      hide-main-wt    12s       dirty     unmerged   ~/worktrees/.../understory
+   hellofresh/isa-orch…  fix-writeback   3d        clean     unmerged   ~/worktrees/.../isa-orchestration
 
 ↑/↓ move · enter open/focus · r refresh · q quit
 ```
@@ -76,10 +76,7 @@ the currently displayed worktrees, rather than a fixed width, so a long
 name is never truncated (unlike Branch, which is fixed-width and can
 still ellipsize). Worktree/Merge are plain-word renderings of `wt`'s own
 compact status glyphs (dirty/ahead/behind), rather than the glyphs
-themselves. Closed shows how long ago understory observed that
-worktree's VS Code window go from open to closed (blank if it's still
-open, or its close happened before understory started watching) — a
-quick way to notice an accidental close before you forget about it.
+themselves.
 
 Enter opens (or, if a window is already open on that path, focuses) a VS
 Code window there. Checks for an already-open window itself first, via
