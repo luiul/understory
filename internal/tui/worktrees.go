@@ -307,31 +307,32 @@ func noWorktreesMessage() string {
 }
 
 // worktreeSummaryLine returns a one-line "N worktrees: N dirty · N stale ·
-// N merged · N clean" breakdown, one mutually-exclusive bucket per
-// worktree (most-actionable-first classification, same spirit as
+// N merged · N clean · N unknown" breakdown, one mutually-exclusive bucket
+// per worktree (most-actionable-first classification, same spirit as
 // canopy's own summaryLine over its State column, folded down to a
 // single dimension since "needs a look" is really one axis here even
 // though it's backed by two Entry fields): Stale wins first (see
 // Entry.Stale's doc: Dirty/MergeStatus are meaningless once true), then
 // Dirty (uncommitted work, worth a look now), then a merged branch
-// (nothing left to do but it's a removal candidate). Everything else
-// (still-open work with nothing outstanding) falls into clean, except
-// when `wt` couldn't determine the branch's merge status at all
-// (Entry.MergeStatus's MergeStatusUnknown): that's not confidently
-// "clean" (it might be safe to remove, might not, wt just doesn't know),
-// so it's labeled "unknown", or folded into "clean+unknown" alongside
-// genuinely clean entries when a summary has both, rather than silently
-// overstating certainty by calling it clean outright. Colored to match
-// the Worktree/Merge table columns via the same style lookups. Returns
-// "" if there are no worktrees, since the placeholder row already says
-// so.
+// (nothing left to do but it's a removal candidate), then clean
+// (still-open work with nothing outstanding). unknown is its own bucket
+// rather than folded into clean: when `wt` couldn't determine a branch's
+// relationship to main at all (Entry.MergeStatus's MergeStatusUnknown),
+// that's not confidently "clean" (it might be safe to remove, might not,
+// wt just doesn't know), so it's counted and labeled separately instead
+// of silently overstating certainty. It sorts last since it's exactly as
+// low-priority as clean in the Merge column's own coloring (colorize.go's
+// mergeStatusStyles gives "unknown" the same dim grey as "-"), just
+// without a confirmed merge relationship to back that up. Colored to
+// match the Worktree/Merge table columns via the same style lookups.
+// Returns "" if there are no worktrees, since the placeholder row
+// already says so.
 func worktreeSummaryLine(entries []worktree.Entry) string {
 	if len(entries) == 0 {
 		return ""
 	}
 
 	counts := map[string]int{}
-	var clean, unknown int
 	for _, e := range entries {
 		switch {
 		case e.Stale:
@@ -341,40 +342,29 @@ func worktreeSummaryLine(entries []worktree.Entry) string {
 		case e.MergeStatus == worktree.MergeStatusMerged:
 			counts["merged"]++
 		case e.MergeStatus == worktree.MergeStatusUnknown:
-			unknown++
+			counts["unknown"]++
 		default:
-			clean++
+			counts["clean"]++
 		}
 	}
 
 	var parts []string
-	for _, bucket := range []string{"dirty", "stale", "merged"} {
+	for _, bucket := range []string{"dirty", "stale", "merged", "clean", "unknown"} {
 		n := counts[bucket]
 		if n == 0 {
 			continue
 		}
+		// merged/unknown are Merge-column words (mergeStatusStyles),
+		// dirty/stale/clean are Worktree-column words
+		// (worktreeStatusStyles); looking each up in its own map rather
+		// than reusing one for both keeps this tied to the same source
+		// of truth the table itself renders from, even though "clean"
+		// and "unknown" happen to resolve to the same dim grey today.
 		style := worktreeStatusStyle(bucket)
-		if bucket == "merged" {
+		if bucket == "merged" || bucket == "unknown" {
 			style = mergeStatusStyle(bucket)
 		}
 		parts = append(parts, style.Render(fmt.Sprintf("%d %s", n, bucket)))
-	}
-	if n := clean + unknown; n > 0 {
-		// Same underlying "nothing to do here" grey regardless of which
-		// word(s) it carries: worktreeStatusStyles only has a "clean"
-		// entry (see colorize.go), and mergeStatusStyles' own "unknown"
-		// happens to already be that same muted grey, so looking the
-		// style up by the fixed key "clean" rather than the variable
-		// label keeps this styled instead of falling back to unstyled
-		// plain text for the "unknown"/"clean+unknown" cases.
-		label := "clean"
-		switch {
-		case clean == 0:
-			label = "unknown"
-		case unknown > 0:
-			label = "clean+unknown"
-		}
-		parts = append(parts, worktreeStatusStyle("clean").Render(fmt.Sprintf("%d %s", n, label)))
 	}
 
 	label := "worktrees"

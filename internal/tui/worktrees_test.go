@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -287,13 +289,91 @@ func TestWorktreeSummaryLineStaleWinsOverDirtyAndMerged(t *testing.T) {
 
 func TestWorktreeSummaryLineOmitsZeroCountBuckets(t *testing.T) {
 	got := worktreeSummaryLine([]worktree.Entry{wtEntry("/w/a", "a", 0)}) // clean only
-	for _, bucket := range []string{"dirty", "stale", "merged"} {
+	for _, bucket := range []string{"dirty", "stale", "merged", "unknown"} {
 		if strings.Contains(got, bucket) {
 			t.Fatalf("got %q, want no %q bucket when its count is 0", got, bucket)
 		}
 	}
 	if !strings.Contains(got, "1 clean") {
 		t.Fatalf("got %q, want the clean bucket", got)
+	}
+}
+
+func TestWorktreeSummaryLineUnknownOnly(t *testing.T) {
+	// Entry.MergeStatus's doc: MergeStatusUnknown covers anything `wt`
+	// reports beyond empty/integrated/ahead. It must render as its own
+	// "unknown" bucket, not get silently folded into (and overstate the
+	// confidence of) "clean".
+	w := wtEntry("/w/a", "a", 0)
+	w.MergeStatus = worktree.MergeStatusUnknown
+
+	got := worktreeSummaryLine([]worktree.Entry{w})
+
+	if !strings.Contains(got, "1 unknown") {
+		t.Fatalf("got %q, want the unknown bucket", got)
+	}
+	if strings.Contains(got, "clean") {
+		t.Fatalf("got %q, want no clean bucket for an unknown-only entry", got)
+	}
+}
+
+func TestWorktreeSummaryLineCleanAndUnknownStayDistinctBucketsWhenBothPresent(t *testing.T) {
+	// A mix of clean and unknown entries must keep separate, exact counts
+	// ("N clean · M unknown") rather than merging into one ambiguous
+	// combined count that hides how many of each there actually are.
+	clean := wtEntry("/w/clean", "clean-branch", 0)
+	unknownA := wtEntry("/w/unknown-a", "unknown-branch-a", 0)
+	unknownA.MergeStatus = worktree.MergeStatusUnknown
+	unknownB := wtEntry("/w/unknown-b", "unknown-branch-b", 0)
+	unknownB.MergeStatus = worktree.MergeStatusUnknown
+
+	got := worktreeSummaryLine([]worktree.Entry{clean, unknownA, unknownB})
+
+	if !strings.Contains(got, "1 clean") {
+		t.Fatalf("got %q, want an exact 1 clean count", got)
+	}
+	if !strings.Contains(got, "2 unknown") {
+		t.Fatalf("got %q, want an exact 2 unknown count", got)
+	}
+	cleanAt := strings.Index(got, "1 clean")
+	unknownAt := strings.Index(got, "2 unknown")
+	if cleanAt < 0 || unknownAt < 0 || !(cleanAt < unknownAt) {
+		t.Fatalf("got %q, want clean to sort before unknown", got)
+	}
+}
+
+func TestWorktreeSummaryLineBucketCountsSumToTotal(t *testing.T) {
+	// Regression guard for the classification switch's mutual exclusivity:
+	// every entry must land in exactly one bucket, so the digits across all
+	// rendered buckets must always add up to the total worktree count, no
+	// matter how the five-way classification evolves later.
+	dirty := wtEntry("/w/dirty", "dirty-branch", 0)
+	dirty.Dirty = true
+	stale := wtEntry("/w/stale", "stale-branch", 0)
+	stale.Stale = true
+	merged := wtEntry("/w/merged", "merged-branch", 0)
+	merged.MergeStatus = worktree.MergeStatusMerged
+	clean := wtEntry("/w/clean", "clean-branch", 0)
+	unknown := wtEntry("/w/unknown", "unknown-branch", 0)
+	unknown.MergeStatus = worktree.MergeStatusUnknown
+
+	entries := []worktree.Entry{dirty, stale, merged, clean, unknown}
+	got := worktreeSummaryLine(entries)
+
+	sum := 0
+	for _, bucket := range []string{"dirty", "stale", "merged", "clean", "unknown"} {
+		matches := regexp.MustCompile(`(\d+) ` + bucket).FindStringSubmatch(got)
+		if matches == nil {
+			t.Fatalf("got %q, want a %q bucket present", got, bucket)
+		}
+		n, err := strconv.Atoi(matches[1])
+		if err != nil {
+			t.Fatalf("got %q, unparseable %q bucket count: %v", got, bucket, err)
+		}
+		sum += n
+	}
+	if sum != len(entries) {
+		t.Fatalf("got bucket counts summing to %d, want %d (len(entries))", sum, len(entries))
 	}
 }
 
