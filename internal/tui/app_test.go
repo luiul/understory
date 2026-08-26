@@ -99,18 +99,18 @@ func TestShortenHomeReplacesTheHomePrefixWithATilde(t *testing.T) {
 func TestCursorSentinelFollowsArrowKeysBetweenPolls(t *testing.T) {
 	m := New(999, false)
 	m.applyWorktrees([]worktree.Entry{wtEntry("/w/a", "a", time.Minute), wtEntry("/w/b", "b", 2*time.Minute)})
-	if got := m.table.Rows()[0][colUpdated]; !strings.Contains(got, loam.Sentinel) {
-		t.Fatalf("got %q, want loam.Sentinel on row 0's Updated cell right after applyWorktrees", got)
+	if got := m.table.Rows()[0][colCreated]; !strings.Contains(got, loam.Sentinel) {
+		t.Fatalf("got %q, want loam.Sentinel on row 0's Created cell right after applyWorktrees", got)
 	}
 
 	// Moving down (without a poll in between) must move the tag too, not
 	// just bubbles/table's own internal cursor.
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	mm := updated.(Model)
-	if got := mm.table.Rows()[0][colUpdated]; strings.Contains(got, loam.Sentinel) {
-		t.Fatalf("got %q, want row 0's Updated cell cleared of loam.Sentinel after moving down", got)
+	if got := mm.table.Rows()[0][colCreated]; strings.Contains(got, loam.Sentinel) {
+		t.Fatalf("got %q, want row 0's Created cell cleared of loam.Sentinel after moving down", got)
 	}
-	if got := mm.table.Rows()[1][colUpdated]; !strings.Contains(got, loam.Sentinel) {
+	if got := mm.table.Rows()[1][colCreated]; !strings.Contains(got, loam.Sentinel) {
 		t.Fatalf("got %q, want row 1 to carry loam.Sentinel after moving down", got)
 	}
 }

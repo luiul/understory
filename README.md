@@ -54,7 +54,7 @@ for the one piece of that old view intentionally not carried over.
 understory — worktrees on this machine
 2 worktrees
 
-Repo                  Branch          Updated   Worktree  Merge      Path
+Repo                  Branch          Created   Worktree  Merge      Path
 luiul/understory      hide-main-wt    12s       dirty     unmerged   ~/worktrees/.../understory
 hellofresh/isa-orch…  fix-writeback   3d        clean     unmerged   ~/worktrees/.../isa-orchestration
 

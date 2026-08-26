@@ -204,6 +204,33 @@ func TestApplyRepoFallbackUsesRepoPathBasenameEvenWithTrailingSlash(t *testing.T
 	}
 }
 
+func TestApplyCreatedTimeUsesTheWorktreeDirectorysBirthTime(t *testing.T) {
+	dir := t.TempDir() // freshly created, so its birth time is "now"
+	entries := []Entry{{Path: dir, CommitTime: time.Now().Add(-30 * 24 * time.Hour)}}
+
+	applyCreatedTime(entries)
+
+	// The directory's birth time should be roughly now, not the 30-day-old
+	// CommitTime it'd fall back to if dirBirthTime somehow failed.
+	if age := time.Since(entries[0].CreatedTime); age < 0 || age > time.Minute {
+		t.Fatalf("got CreatedTime %v ago, want it close to just-now (the temp dir's real birth time)", age)
+	}
+}
+
+func TestApplyCreatedTimeFallsBackToCommitTimeWhenTheDirectoryIsGone(t *testing.T) {
+	// A Stale entry's directory no longer exists (see Entry.Stale's doc),
+	// so dirBirthTime can't stat it and applyCreatedTime must fall back to
+	// CommitTime rather than leaving CreatedTime zero.
+	commitTime := time.Unix(1700000000, 0)
+	entries := []Entry{{Path: "/no/such/path/understory-test", CommitTime: commitTime}}
+
+	applyCreatedTime(entries)
+
+	if entries[0].CreatedTime != commitTime {
+		t.Fatalf("got CreatedTime %v, want the CommitTime fallback %v", entries[0].CreatedTime, commitTime)
+	}
+}
+
 func TestDedupeDropsRepeatsPreservingFirstOccurrenceOrder(t *testing.T) {
 	got := dedupe([]string{"/a", "/b", "/a", "/c", "/b"})
 	want := []string{"/a", "/b", "/c"}

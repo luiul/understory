@@ -11,7 +11,8 @@ import (
 )
 
 func wtEntry(path, branch string, commitAge time.Duration) worktree.Entry {
-	return worktree.Entry{Owner: "acme", Repo: "widgets", Branch: branch, Path: path, CommitTime: time.Now().Add(-commitAge)}
+	t := time.Now().Add(-commitAge)
+	return worktree.Entry{Owner: "acme", Repo: "widgets", Branch: branch, Path: path, CommitTime: t, CreatedTime: t}
 }
 
 func pathsOf(worktrees []worktree.Entry) []string {
@@ -36,7 +37,8 @@ func TestSortWorktreesOrdersMostRecentlyCommittedFirst(t *testing.T) {
 }
 
 func otherRepoEntry(path, branch string, commitAge time.Duration) worktree.Entry {
-	return worktree.Entry{Owner: "other", Repo: "gizmos", Branch: branch, Path: path, CommitTime: time.Now().Add(-commitAge)}
+	t := time.Now().Add(-commitAge)
+	return worktree.Entry{Owner: "other", Repo: "gizmos", Branch: branch, Path: path, CommitTime: t, CreatedTime: t}
 }
 
 func TestSortWorktreesGroupsEachRepoIntoOneContiguousBlock(t *testing.T) {
@@ -151,13 +153,36 @@ func TestBuildWorktreeRowsPlaceholderWhenEmpty(t *testing.T) {
 	}
 }
 
-func TestBuildWorktreeRowsTagsTheCursorRowsUpdatedCell(t *testing.T) {
-	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), wtEntry("/w/b", "b", 0)}, 1, "", time.Now())
-	if strings.Contains(rows[0][colUpdated], cursorSentinel) {
-		t.Fatalf("got cursorSentinel on non-cursor row 0's Updated cell %q, want it absent", rows[0][colUpdated])
+func TestBuildWorktreeRowsCreatedColumnUsesCreatedTimeNotCommitTime(t *testing.T) {
+	// A branch can go a long time between commits while the worktree
+	// itself is much younger (or vice versa): the Created column must
+	// track Entry.CreatedTime specifically, not fall back to reading
+	// CommitTime, or a stale-but-recently-created worktree (or a
+	// long-lived worktree with a very fresh commit) would show the wrong
+	// age entirely.
+	w := worktree.Entry{
+		Owner:       "acme",
+		Repo:        "widgets",
+		Branch:      "feature",
+		Path:        "/w/a",
+		CommitTime:  time.Now(),
+		CreatedTime: time.Now().Add(-3 * 24 * time.Hour),
 	}
-	if !strings.Contains(rows[1][colUpdated], cursorSentinel) {
-		t.Fatalf("got %q, want row 1's Updated cell to carry cursorSentinel (it's the cursor row)", rows[1][colUpdated])
+
+	rows := buildWorktreeRows([]worktree.Entry{w}, -1, "", time.Now())
+
+	if got := rows[0][colCreated]; got != "3d" {
+		t.Fatalf("got %q, want \"3d\" (from CreatedTime, not CommitTime's ~0s)", got)
+	}
+}
+
+func TestBuildWorktreeRowsTagsTheCursorRowsCreatedCell(t *testing.T) {
+	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), wtEntry("/w/b", "b", 0)}, 1, "", time.Now())
+	if strings.Contains(rows[0][colCreated], cursorSentinel) {
+		t.Fatalf("got cursorSentinel on non-cursor row 0's Created cell %q, want it absent", rows[0][colCreated])
+	}
+	if !strings.Contains(rows[1][colCreated], cursorSentinel) {
+		t.Fatalf("got %q, want row 1's Created cell to carry cursorSentinel (it's the cursor row)", rows[1][colCreated])
 	}
 }
 

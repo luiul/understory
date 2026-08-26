@@ -69,6 +69,17 @@ type Entry struct {
 	CommitSHA  string
 	CommitMsg  string
 	CommitTime time.Time
+	// CreatedTime is when this worktree's own directory was created on
+	// disk (its filesystem birth time, see dirBirthTime), used as a proxy
+	// for "when this worktree/branch was created": neither `wt` nor git
+	// itself record a branch's own creation time, but the worktree
+	// directory `wt add`/`git worktree add` created for it is stamped
+	// with exactly that moment. Falls back to CommitTime (see
+	// applyCreatedTime) when birth time can't be read: a Stale entry's
+	// directory is already gone, and non-macOS filesystems have no
+	// straightforward stdlib way to expose birth time at all (see
+	// birthtime_other.go).
+	CreatedTime time.Time
 	// Dirty is true if the worktree has any staged, modified, untracked,
 	// renamed, or deleted change relative to its own HEAD.
 	Dirty bool
@@ -220,7 +231,26 @@ func ListWorktrees(repoPath string) ([]Entry, error) {
 		return nil, err
 	}
 	applyRepoFallback(entries, repoPath)
+	applyCreatedTime(entries)
 	return entries, nil
+}
+
+// applyCreatedTime fills in CreatedTime (mutating entries in place),
+// preferring each entry's own worktree directory's filesystem birth
+// time (dirBirthTime) as the best available proxy for "when this
+// worktree/branch was created" (see Entry.CreatedTime's doc for why:
+// neither `wt` nor git record that directly). Falls back to CommitTime
+// when birth time can't be read: a Stale entry's directory is already
+// gone by definition, and dirBirthTime itself always reports ok=false on
+// platforms without a birth-time syscall (see birthtime_other.go).
+func applyCreatedTime(entries []Entry) {
+	for i := range entries {
+		if bt, ok := dirBirthTime(entries[i].Path); ok {
+			entries[i].CreatedTime = bt
+		} else {
+			entries[i].CreatedTime = entries[i].CommitTime
+		}
+	}
 }
 
 // applyRepoFallback fills in Repo (mutating entries in place) for any

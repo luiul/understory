@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// humanizeSince renders a duration the way understory's Updated column
+// humanizeSince renders a duration the way understory's Created column
 // does: compact, at most two units, no sub-second precision. Negative
 // durations (a clock hiccup between two time.Now() reads) render as "0s"
 // rather than going negative.

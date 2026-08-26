@@ -17,13 +17,13 @@ import (
 // branchColWidth are only floors (see repoColumnWidth/branchColumnWidth):
 // the Repo and Branch columns each grow to fit whichever displayed
 // label/branch name is longest, so a long owner/repo name or branch name
-// is never truncated the way a fixed width would. Updated/Worktree/Merge
-// stay fixed; Path gets whatever's left after all of those, floored at
-// minPathWidth.
+// is never truncated the way a fixed width would. Created/Worktree/
+// Merge stay fixed; Path gets whatever's left after all of those,
+// floored at minPathWidth.
 const (
 	repoColWidth     = 16
 	branchColWidth   = 20
-	updatedColWidth  = 8
+	createdColWidth  = 8
 	worktreeColWidth = 8
 	mergeColWidth    = 9
 	minPathWidth     = 20
@@ -38,7 +38,7 @@ const (
 const (
 	colRepo = iota
 	colBranch
-	colUpdated
+	colCreated
 	colWorktree
 	colMerge
 	colPath
@@ -78,13 +78,13 @@ func branchColumnWidth(worktrees []worktree.Entry) int {
 // worktreeColumns builds the view's columns for the given terminal width
 // and worktree set: Repo and Branch each grow to fit their widest
 // displayed value (see repoColumnWidth/branchColumnWidth),
-// Updated/Worktree/Merge are fixed width, and Path fills whatever's
+// Created/Worktree/Merge are fixed width, and Path fills whatever's
 // left.
 func worktreeColumns(width int, worktrees []worktree.Entry) []table.Column {
 	cols := []table.Column{
 		{Title: "Repo", Width: repoColumnWidth(worktrees)},
 		{Title: "Branch", Width: branchColumnWidth(worktrees)},
-		{Title: "Updated", Width: updatedColWidth},
+		{Title: "Created", Width: createdColWidth},
 		{Title: "Worktree", Width: worktreeColWidth},
 		{Title: "Merge", Width: mergeColWidth},
 	}
@@ -257,23 +257,23 @@ func buildWorktreeRows(worktrees []worktree.Entry, cursor int, home string, now 
 		if i > 0 && label == repoLabel(worktrees[i-1]) {
 			label = ""
 		}
-		updated := humanizeSince(now.Sub(w.CommitTime))
+		created := humanizeSince(now.Sub(w.CreatedTime))
 		if i == cursor {
 			// Prepended, not appended: bubbles/table truncates a
 			// too-long cell from the tail (runewidth.Truncate keeps the
 			// head + an ellipsis), so a leading zero-width tag always
 			// survives regardless of how long the cell's real content
 			// is, where a trailing one could get truncated away along
-			// with the tail. Updated's own content is always short
+			// with the tail. Created's own content is always short
 			// (humanizeSince, e.g. "12s"/"3d") and never truncated in
 			// practice, but the tag's placement is written to hold even
 			// if that ever changed.
-			updated = loam.Sentinel + updated
+			created = loam.Sentinel + created
 		}
 		rows[i] = table.Row{
 			label,
 			w.Branch,
-			updated,
+			created,
 			worktreeStatusLabel(w),
 			mergeStatusLabel(w),
 			shortenHome(w.Path, home),
