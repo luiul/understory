@@ -58,7 +58,7 @@ Repo                  Branch          Created   Worktree  Merge      Path
 luiul/understory      hide-main-wt    12s       dirty     unmerged   ~/worktrees/.../understory
 hellofresh/isa-orch…  fix-writeback   3d        clean     unmerged   ~/worktrees/.../isa-orchestration
 
-↑/↓ move · enter open/focus · r refresh · q quit
+↑/↓ move · enter open/focus · drag column border to resize · r refresh · q quit
 ```
 
 (the currently selected row also gets a full-width grey highlight in the
@@ -85,8 +85,23 @@ fixed-width and can still ellipsize). Worktree/Merge are plain-word
 renderings of `wt`'s own compact status glyphs (dirty/ahead/behind),
 rather than the glyphs themselves.
 
+Each internal column border can be dragged with the mouse to widen or
+narrow it: the two columns it sits between trade width between
+themselves, so the table's own total width never changes, only how it's
+divided up between whichever two columns you actually grabbed (see
+[`github.com/luiul/dashkit/trellis`](https://github.com/luiul/dashkit/tree/main/trellis),
+the same package canopy uses for its own table). A visible divider marks
+each border on the header row (see
+[`github.com/luiul/dashkit/loam`](https://github.com/luiul/dashkit/tree/main/loam)'s
+`DrawHeaderBorders`) so there's something to aim the drag at, rather than
+an invisible 2-space gap. A resize sticks across the next poll (Repo/
+Branch drop a stale override the moment a freshly polled label outgrows
+it — see worktreeColumns' own doc), but resets on a terminal resize,
+since that already recomputes Path's own width from scratch against the
+new terminal width anyway.
+
 Enter opens (or, if a window is already open on that path, focuses) a VS
-Code window there via [`github.com/luiul/mycelium`](https://github.com/luiul/mycelium)'s
+Code window there via [`github.com/luiul/dashkit/mycelium`](https://github.com/luiul/dashkit/tree/main/mycelium)'s
 shared open-or-focus logic: it checks for an already-open window itself
 first, via AppleScript against each window's title, and only forces a
 brand-new one (`-n`) once it knows none is already open. `code
@@ -139,9 +154,9 @@ dashboard.
   to ask about.
 - `internal/tui`: the Bubble Tea dashboard (table, polling timer,
   open-on-Enter via
-  [`github.com/luiul/mycelium`](https://github.com/luiul/mycelium)'s shared
-  open-or-focus logic — the same package canopy uses to jump to whichever
-  window is running a given agent — notifications).
+  [`github.com/luiul/dashkit/mycelium`](https://github.com/luiul/dashkit/tree/main/mycelium)'s
+  shared open-or-focus logic — the same package canopy uses to jump to
+  whichever window is running a given agent — notifications).
 - `cmd/understory`: the CLI entry point (flags, version).
 
 ## Install

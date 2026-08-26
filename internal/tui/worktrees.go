@@ -9,7 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/mattn/go-runewidth"
 
-	"github.com/luiul/loam"
+	"github.com/luiul/dashkit/loam"
 	"github.com/luiul/understory/internal/worktree"
 )
 
@@ -80,7 +80,24 @@ func branchColumnWidth(worktrees []worktree.Entry) int {
 // displayed value (see repoColumnWidth/branchColumnWidth),
 // Created/Worktree/Merge are fixed width, and Path fills whatever's
 // left.
-func worktreeColumns(width int, worktrees []worktree.Entry) []table.Column {
+//
+// overrides carries forward whichever columns a mouse drag (see
+// github.com/luiul/dashkit/trellis and Model.colOverrides' own doc) has
+// actually widened past their own natural floor — keyed by the Column
+// indexes above, same map Model.colOverrides holds. An override only
+// applies when it's still wider than that column's own freshly computed
+// floor: Repo/Branch's floor moves with the data (a longer owner/repo
+// label or branch name than the last poll raises it), so a stale
+// override recorded against a shorter one is dropped rather than
+// truncating the new, longer value; Created/Worktree/Merge's floor never
+// moves, so for them this is simply "only apply an override that grew
+// the column, never one that would shrink it below its own default".
+// Path never takes an override at all: it always absorbs whatever's
+// left after every other column's own effective (possibly overridden)
+// width is accounted for, the same invariant a mouse drag itself already
+// keeps (see trellis.Model.Handle's doc) — the row's total width never
+// changes no matter which column a user actually resized.
+func worktreeColumns(width int, worktrees []worktree.Entry, overrides map[int]int) []table.Column {
 	cols := []table.Column{
 		{Title: "Repo", Width: repoColumnWidth(worktrees)},
 		{Title: "Branch", Width: branchColumnWidth(worktrees)},
@@ -90,8 +107,11 @@ func worktreeColumns(width int, worktrees []worktree.Entry) []table.Column {
 	}
 
 	fixedWidth := 0
-	for _, c := range cols {
-		fixedWidth += c.Width
+	for i := range cols {
+		if w, ok := overrides[i]; ok && w > cols[i].Width {
+			cols[i].Width = w
+		}
+		fixedWidth += cols[i].Width
 	}
 	totalCells := len(cols) + 1 // + Path
 	remaining := width - fixedWidth - 2*totalCells
@@ -99,6 +119,28 @@ func worktreeColumns(width int, worktrees []worktree.Entry) []table.Column {
 		remaining = minPathWidth
 	}
 	return append(cols, table.Column{Title: "Path", Width: remaining})
+}
+
+// columnMinWidths returns each column's own minimum width, in the same
+// order/index worktreeColumns builds them, for trellis' mouse-resize
+// handling (see Update's tea.MouseMsg case). Repo and Branch floor at
+// their own currently displayed width (see repoColumnWidth/
+// branchColumnWidth): both already grow to fit whichever label/branch
+// name is currently longest, so there's no room to shrink either without
+// truncating it. Created/Worktree/Merge floor at their own fixed default
+// for the same reason — every value they ever show already fits exactly
+// there. Only Path, which absorbs whatever's left of the terminal width,
+// has real room to give up; its floor is minPathWidth, the same one
+// worktreeColumns' own leftover-space computation already respects.
+func columnMinWidths(worktrees []worktree.Entry) []int {
+	return []int{
+		repoColumnWidth(worktrees),
+		branchColumnWidth(worktrees),
+		createdColWidth,
+		worktreeColWidth,
+		mergeColWidth,
+		minPathWidth,
+	}
 }
 
 // sortWorktrees orders worktrees for display: grouped so every worktree
@@ -205,7 +247,7 @@ func (m *Model) applyWorktrees(fresh []worktree.Entry) {
 	// (bubbles/table re-renders immediately against whatever's currently
 	// set, so a column/row count mismatch mid-update panics).
 	m.table.SetRows(nil)
-	m.table.SetColumns(worktreeColumns(m.width, newDisplayed))
+	m.table.SetColumns(worktreeColumns(m.width, newDisplayed, m.colOverrides))
 	m.table.SetRows(buildWorktreeRows(newDisplayed, m.cursor, m.home, time.Now()))
 	m.table.SetCursor(m.cursor)
 }

@@ -417,7 +417,7 @@ func TestResolveWorktreeCursorFallsBackWhenPathIsGone(t *testing.T) {
 }
 
 func TestWorktreeColumnsPathNeverShrinksBelowTheFloor(t *testing.T) {
-	cols := worktreeColumns(50, nil)
+	cols := worktreeColumns(50, nil, nil)
 	last := cols[len(cols)-1]
 	if last.Width < minPathWidth {
 		t.Fatalf("got Path width %d, want at least %d", last.Width, minPathWidth)
@@ -430,7 +430,7 @@ func TestWorktreeColumnsRepoGrowsToFitTheLongestLabelInsteadOfTruncating(t *test
 	long.Repo = "isa-orchestration-and-something-long"
 	wantWidth := len(repoLabel(long)) // ASCII-only label; runewidth.StringWidth == len here
 
-	cols := worktreeColumns(200, []worktree.Entry{long})
+	cols := worktreeColumns(200, []worktree.Entry{long}, nil)
 
 	if got := cols[colRepo].Width; got != wantWidth {
 		t.Fatalf("got Repo width %d, want %d (the full label's width, untruncated)", got, wantWidth)
@@ -440,9 +440,53 @@ func TestWorktreeColumnsRepoGrowsToFitTheLongestLabelInsteadOfTruncating(t *test
 func TestWorktreeColumnsRepoNeverShrinksBelowItsFloor(t *testing.T) {
 	short := wtEntry("/w/a", "a", 0) // "acme/widgets", shorter than repoColWidth
 
-	cols := worktreeColumns(200, []worktree.Entry{short})
+	cols := worktreeColumns(200, []worktree.Entry{short}, nil)
 
 	if got := cols[colRepo].Width; got != repoColWidth {
 		t.Fatalf("got Repo width %d, want the floor %d for a short label", got, repoColWidth)
+	}
+}
+
+func TestWorktreeColumnsAppliesAnOverrideWiderThanTheNaturalFloor(t *testing.T) {
+	overrides := map[int]int{colRepo: repoColWidth + 10}
+
+	cols := worktreeColumns(200, nil, overrides)
+
+	if got, want := cols[colRepo].Width, repoColWidth+10; got != want {
+		t.Fatalf("got Repo width %d, want %d (the override, wider than the floor)", got, want)
+	}
+}
+
+func TestWorktreeColumnsDropsAnOverrideNarrowerThanAFreshlyPolledLongerLabel(t *testing.T) {
+	// An override recorded against a short label (e.g. from an earlier
+	// poll's own drag) must not truncate a longer one a later poll
+	// brings in \u2014 unlike canopy's fixed columns, Repo/Branch's own floor
+	// moves with the data.
+	long := wtEntry("/w/a", "a", 0)
+	long.Owner = "hellofresh"
+	long.Repo = "isa-orchestration-and-something-long"
+	wantWidth := len(repoLabel(long)) // ASCII-only label; runewidth.StringWidth == len here
+
+	overrides := map[int]int{colRepo: repoColWidth + 2} // stale, narrower than the new label
+
+	cols := worktreeColumns(200, []worktree.Entry{long}, overrides)
+
+	if got := cols[colRepo].Width; got != wantWidth {
+		t.Fatalf("got Repo width %d, want %d (the new, longer label's own floor, not the stale override)", got, wantWidth)
+	}
+}
+
+func TestWorktreeColumnsNeverAppliesAnOverrideToPath(t *testing.T) {
+	// Path always absorbs whatever's left over, the same invariant a
+	// mouse drag itself already keeps (see trellis.Model.Handle's doc):
+	// an override recorded against it would make no sense and must be
+	// ignored entirely.
+	overrides := map[int]int{colPath: 9999}
+
+	cols := worktreeColumns(200, nil, overrides)
+
+	last := cols[len(cols)-1]
+	if last.Width == 9999 {
+		t.Fatalf("got Path width %d, want it computed from leftover space, not the override", last.Width)
 	}
 }
