@@ -67,7 +67,8 @@ real terminal output, not shown here since it's just a background color)
 Any column's border can be dragged with the mouse to widen or narrow it —
 Path absorbs whatever a drag adds to or takes from anywhere else, so the
 table's own total width never changes, only how it's divided up (see
-[`github.com/luiul/trellis`](https://github.com/luiul/trellis) below). A
+[`github.com/luiul/dashkit/trellis`](https://github.com/luiul/dashkit/tree/main/trellis)
+below). A
 resize sticks across the next poll (`wt list` re-running doesn't discard
 it), but resets on a terminal resize, since that already recomputes every
 column's width from scratch against the new terminal width anyway.
@@ -94,7 +95,8 @@ renderings of `wt`'s own compact status glyphs (dirty/ahead/behind),
 rather than the glyphs themselves.
 
 Enter opens (or, if a window is already open on that path, focuses) a VS
-Code window there via [`github.com/luiul/mycelium`](https://github.com/luiul/mycelium)'s
+Code window there via
+[`github.com/luiul/dashkit/mycelium`](https://github.com/luiul/dashkit/tree/main/mycelium)'s
 shared open-or-focus logic: it checks for an already-open window itself
 first, via AppleScript against each window's title, and only forces a
 brand-new one (`-n`) once it knows none is already open. `code
@@ -147,10 +149,11 @@ dashboard.
   to ask about.
 - `internal/tui`: the Bubble Tea dashboard (table, polling timer,
   open-on-Enter via
-  [`github.com/luiul/mycelium`](https://github.com/luiul/mycelium)'s shared
-  open-or-focus logic — the same package canopy uses to jump to whichever
-  window is running a given agent — notifications, and mouse column
-  resizing via [`github.com/luiul/trellis`](https://github.com/luiul/trellis)
+  [`github.com/luiul/dashkit/mycelium`](https://github.com/luiul/dashkit/tree/main/mycelium)'s
+  shared open-or-focus logic — the same package canopy uses to jump to
+  whichever window is running a given agent — notifications, and mouse
+  column resizing via
+  [`github.com/luiul/dashkit/trellis`](https://github.com/luiul/dashkit/tree/main/trellis)
   — the same package canopy uses for its own table).
 - `cmd/understory`: the CLI entry point (flags, version).
 
