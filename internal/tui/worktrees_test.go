@@ -392,7 +392,7 @@ func TestResolveWorktreeCursorFallsBackWhenPathIsGone(t *testing.T) {
 }
 
 func TestWorktreeColumnsPathNeverShrinksBelowTheFloor(t *testing.T) {
-	cols := worktreeColumns(50, nil)
+	cols := worktreeColumns(50, nil, nil)
 	last := cols[len(cols)-1]
 	if last.Width < minPathWidth {
 		t.Fatalf("got Path width %d, want at least %d", last.Width, minPathWidth)
@@ -405,7 +405,7 @@ func TestWorktreeColumnsRepoGrowsToFitTheLongestLabelInsteadOfTruncating(t *test
 	long.Repo = "isa-orchestration-and-something-long"
 	wantWidth := len(repoLabel(long)) // ASCII-only label; runewidth.StringWidth == len here
 
-	cols := worktreeColumns(200, []worktree.Entry{long})
+	cols := worktreeColumns(200, []worktree.Entry{long}, nil)
 
 	if got := cols[colRepo].Width; got != wantWidth {
 		t.Fatalf("got Repo width %d, want %d (the full label's width, untruncated)", got, wantWidth)
@@ -415,7 +415,7 @@ func TestWorktreeColumnsRepoGrowsToFitTheLongestLabelInsteadOfTruncating(t *test
 func TestWorktreeColumnsRepoNeverShrinksBelowItsFloor(t *testing.T) {
 	short := wtEntry("/w/a", "a", 0) // "acme/widgets", shorter than repoColWidth
 
-	cols := worktreeColumns(200, []worktree.Entry{short})
+	cols := worktreeColumns(200, []worktree.Entry{short}, nil)
 
 	if got := cols[colRepo].Width; got != repoColWidth {
 		t.Fatalf("got Repo width %d, want the floor %d for a short label", got, repoColWidth)

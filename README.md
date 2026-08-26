@@ -58,11 +58,19 @@ Repo                  Branch          Updated   Worktree  Merge      Path
 luiul/understory      hide-main-wt    12s       dirty     unmerged   ~/worktrees/.../understory
 hellofresh/isa-orch…  fix-writeback   3d        clean     unmerged   ~/worktrees/.../isa-orchestration
 
-↑/↓ move · enter open/focus · r refresh · q quit
+↑/↓ move · enter open/focus · drag column border to resize · r refresh · q quit
 ```
 
 (the currently selected row also gets a full-width grey highlight in the
 real terminal output, not shown here since it's just a background color)
+
+Any column's border can be dragged with the mouse to widen or narrow it —
+Path absorbs whatever a drag adds to or takes from anywhere else, so the
+table's own total width never changes, only how it's divided up (see
+[`github.com/luiul/trellis`](https://github.com/luiul/trellis) below). A
+resize sticks across the next poll (`wt list` re-running doesn't discard
+it), but resets on a terminal resize, since that already recomputes every
+column's width from scratch against the new terminal width anyway.
 
 Each repo's main worktree (`Entry.IsMain`: the base-branch checkout
 `wt`/coppice created the others alongside, not necessarily a branch named
@@ -141,7 +149,9 @@ dashboard.
   open-on-Enter via
   [`github.com/luiul/mycelium`](https://github.com/luiul/mycelium)'s shared
   open-or-focus logic — the same package canopy uses to jump to whichever
-  window is running a given agent — notifications).
+  window is running a given agent — notifications, and mouse column
+  resizing via [`github.com/luiul/trellis`](https://github.com/luiul/trellis)
+  — the same package canopy uses for its own table).
 - `cmd/understory`: the CLI entry point (flags, version).
 
 ## Install

@@ -24,6 +24,7 @@ import (
 
 	"github.com/luiul/loam"
 	"github.com/luiul/mycelium"
+	"github.com/luiul/trellis"
 	"github.com/luiul/understory/internal/worktree"
 )
 
@@ -96,6 +97,21 @@ type Model struct {
 
 	table table.Model
 
+	// resizer tracks an in-progress mouse column-border drag (see
+	// github.com/luiul/trellis); colOverrides remembers the resulting width
+	// of whichever column(s) the user has actually dragged, by column index
+	// (see the Column indexes below), so worktreeColumns' own content-driven
+	// recompute — which otherwise runs on every poll, since Repo/Branch grow
+	// to fit whatever's currently longest — doesn't silently discard a resize
+	// the very next time new worktree data comes in. Cleared on a terminal
+	// resize (see Update's WindowSizeMsg case): a genuinely new terminal
+	// width invalidates the old distribution of space entirely, the same
+	// reset both dashboards' own layout already gets from a resize.
+	colOverrides map[int]int
+	// resizer tracks an in-progress mouse column-border drag; see
+	// colOverrides' own doc above for how its result gets persisted.
+	resizer trellis.Model
+
 	notification  string
 	notifyIsError bool
 	notifyToken   int
@@ -109,7 +125,7 @@ type Model struct {
 // view; see displayedWorktrees' doc.
 func New(interval time.Duration, showMain bool) Model {
 	t := table.New(
-		table.WithColumns(worktreeColumns(0, nil)),
+		table.WithColumns(worktreeColumns(0, nil, nil)),
 		table.WithFocused(true),
 		table.WithHeight(15),
 	)
@@ -127,6 +143,7 @@ func New(interval time.Duration, showMain bool) Model {
 		home:     homeDir(),
 		showMain: showMain,
 		table:    t,
+		resizer:  trellis.New(),
 	}
 }
 
@@ -161,9 +178,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		// A new terminal width invalidates whatever distribution of space a
+		// prior drag settled on — resize() is about to recompute every
+		// column from scratch against the new width, so any stale override
+		// dropped in here first rather than fighting that recompute.
+		m.colOverrides = nil
 		m.table.SetWidth(msg.Width)
 		m.table.SetHeight(clampInt(msg.Height-6, 3, 1000))
 		m.resize()
+		return m, nil
+
+	case tea.MouseMsg:
+		_, originY := m.renderHeader()
+		cols := m.table.Columns()
+		widths, changed := m.resizer.Handle(msg, cols, worktreeMinWidths(), colPath, 0, originY)
+		if changed {
+			if m.colOverrides == nil {
+				m.colOverrides = map[int]int{}
+			}
+			m.colOverrides[m.resizer.DragColumn()] = widths[m.resizer.DragColumn()]
+			m.table.SetColumns(trellis.Apply(cols, widths))
+		}
 		return m, nil
 
 	case tea.KeyMsg:
@@ -252,9 +287,28 @@ func (m *Model) resize() {
 	// currently set, so swapping to a column count the old rows don't
 	// match panics if the two are ever briefly out of sync mid-update.
 	m.table.SetRows(nil)
-	m.table.SetColumns(worktreeColumns(m.width, m.displayedWorktrees()))
+	m.table.SetColumns(worktreeColumns(m.width, m.displayedWorktrees(), m.colOverrides))
 	m.table.SetRows(buildWorktreeRows(m.displayedWorktrees(), cursor, m.home, time.Now()))
 	m.table.SetCursor(cursor)
+}
+
+// renderHeader builds the header block (title, plus a worktree summary
+// line once there's anything to summarize) and reports how many terminal
+// rows precede the table's own header row: the header block's own line
+// count, plus the blank separator line View always inserts before the
+// table. View and the tea.MouseMsg case in Update both need exactly this
+// — View to render the text, mouse handling to know whether a click
+// landed on the table's own header row (see trellis.Model.Handle's doc) —
+// so both call this one helper rather than keeping two copies of the same
+// line-counting logic in sync by hand.
+func (m Model) renderHeader() (text string, tableOriginY int) {
+	text = titleStyle.Render("understory") + subtleStyle.Render(" — worktrees on this machine")
+	lines := 1
+	if summary := worktreeSummaryLine(m.displayedWorktrees()); summary != "" {
+		text += "\n" + summary
+		lines++
+	}
+	return text, lines + 1 // +1 for the blank separator line View puts before the table
 }
 
 // View implements tea.Model.
@@ -263,12 +317,9 @@ func (m Model) View() string {
 		return ""
 	}
 
-	header := titleStyle.Render("understory") + subtleStyle.Render(" — worktrees on this machine")
-	if summary := worktreeSummaryLine(m.displayedWorktrees()); summary != "" {
-		header += "\n" + summary
-	}
+	header, _ := m.renderHeader()
 
-	footer := subtleStyle.Render("↑/↓ move · enter open/focus · r refresh · q quit")
+	footer := subtleStyle.Render("↑/↓ move · enter open/focus · drag column border to resize · r refresh · q quit")
 	if m.notification != "" {
 		style := okStyle
 		if m.notifyIsError {
@@ -284,7 +335,7 @@ func (m Model) View() string {
 // Run starts the dashboard program and blocks until the user quits.
 // showMain controls whether each repo's main worktree is shown; see New.
 func Run(interval time.Duration, showMain bool) error {
-	p := tea.NewProgram(New(interval, showMain), tea.WithAltScreen())
+	p := tea.NewProgram(New(interval, showMain), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err := p.Run()
 	return err
 }

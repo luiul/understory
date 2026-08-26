@@ -60,17 +60,43 @@ func repoColumnWidth(worktrees []worktree.Entry) int {
 	return width
 }
 
+// worktreeMinWidths returns each column's own minimum width, in the same
+// order worktreeColumns builds them, for trellis' mouse-resize handling
+// (see app.go's tea.MouseMsg case): Branch/Updated/Worktree/Merge floor at
+// their own fixed default width, since every value they ever show already
+// fits exactly there and shrinking further would only truncate it; Repo
+// floors low enough to still resize freely (it already grows to fit its
+// own longest label on top of this); Path floors at minPathWidth, the
+// same floor its own leftover-space computation already respects.
+func worktreeMinWidths() []int {
+	return []int{6, branchColWidth, updatedColWidth, worktreeColWidth, mergeColWidth, minPathWidth}
+}
+
 // worktreeColumns builds the view's columns for the given terminal width
 // and worktree set: Repo grows to fit its widest displayed label (see
 // repoColumnWidth), Branch/Updated/Worktree/Merge are fixed width, and
-// Path fills whatever's left.
-func worktreeColumns(width int, worktrees []worktree.Entry) []table.Column {
+// Path fills whatever's left. overrides applies on top of all of that,
+// keyed by Column index (colRepo..colMerge; see the Column indexes below)
+// — the resulting width of whichever column(s) a user has actually
+// dragged via the mouse (see app.go's Model.colOverrides), so a fresh
+// poll's own content-driven recompute doesn't silently discard it. Path
+// is never given an override of its own: it's trellis' designated flex
+// column, so its width is always however much is left after every other
+// (possibly overridden) column's own effective width is accounted for —
+// the same invariant that keeps the table's total width equal to the
+// terminal's regardless of which border a user actually dragged.
+func worktreeColumns(width int, worktrees []worktree.Entry, overrides map[int]int) []table.Column {
 	cols := []table.Column{
 		{Title: "Repo", Width: repoColumnWidth(worktrees)},
 		{Title: "Branch", Width: branchColWidth},
 		{Title: "Updated", Width: updatedColWidth},
 		{Title: "Worktree", Width: worktreeColWidth},
 		{Title: "Merge", Width: mergeColWidth},
+	}
+	for i := range cols {
+		if w, ok := overrides[i]; ok {
+			cols[i].Width = w
+		}
 	}
 
 	fixedWidth := 0
@@ -188,7 +214,7 @@ func (m *Model) applyWorktrees(fresh []worktree.Entry) {
 	// (bubbles/table re-renders immediately against whatever's currently
 	// set, so a column/row count mismatch mid-update panics).
 	m.table.SetRows(nil)
-	m.table.SetColumns(worktreeColumns(m.width, newDisplayed))
+	m.table.SetColumns(worktreeColumns(m.width, newDisplayed, m.colOverrides))
 	m.table.SetRows(buildWorktreeRows(newDisplayed, m.cursor, m.home, time.Now()))
 	m.table.SetCursor(m.cursor)
 }

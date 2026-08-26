@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/luiul/loam"
@@ -136,5 +137,107 @@ func TestClampCursor(t *testing.T) {
 		if got := clampCursor(c.idx, c.n); got != c.want {
 			t.Errorf("clampCursor(%d, %d) = %d, want %d", c.idx, c.n, got, c.want)
 		}
+	}
+}
+
+// repoBorderX returns the on-screen X of the Repo column's own right-hand
+// border, given cols in the same order/widths worktreeColumns builds them.
+func repoBorderX(cols []table.Column) int {
+	off := loam.ColumnOffsets(cols)[colRepo]
+	return off.Start + off.Width
+}
+
+func TestMouseDragWidensRepoColumnAndShrinksPathToMatch(t *testing.T) {
+	m := New(999, false)
+	m.width = 200
+	m.table.SetWidth(200)
+	m.applyWorktrees([]worktree.Entry{wtEntry("/w/a", "a", time.Minute)})
+
+	cols := m.table.Columns()
+	_, originY := m.renderHeader()
+	borderX := repoBorderX(cols)
+	oldRepoWidth, oldPathWidth := cols[colRepo].Width, cols[colPath].Width
+
+	updated, _ := m.Update(tea.MouseMsg{X: borderX, Y: originY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.MouseMsg{X: borderX + 5, Y: originY, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
+	m = updated.(Model)
+
+	gotCols := m.table.Columns()
+	if got, want := gotCols[colRepo].Width, oldRepoWidth+5; got != want {
+		t.Fatalf("Repo width = %d, want %d", got, want)
+	}
+	if got, want := gotCols[colPath].Width, oldPathWidth-5; got != want {
+		t.Fatalf("Path width = %d, want %d (flex column absorbs the drag)", got, want)
+	}
+}
+
+func TestMouseDragSurvivesTheNextPoll(t *testing.T) {
+	m := New(999, false)
+	m.width = 200
+	m.table.SetWidth(200)
+	m.applyWorktrees([]worktree.Entry{wtEntry("/w/a", "a", time.Minute)})
+
+	cols := m.table.Columns()
+	_, originY := m.renderHeader()
+	borderX := repoBorderX(cols)
+
+	updated, _ := m.Update(tea.MouseMsg{X: borderX, Y: originY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.MouseMsg{X: borderX + 5, Y: originY, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
+	m = updated.(Model)
+	resized := m.table.Columns()[colRepo].Width
+
+	// A fresh poll re-derives Repo's width from content (repoColumnWidth)
+	// on every call; the user's own drag must still win.
+	m.applyWorktrees([]worktree.Entry{wtEntry("/w/a", "a", time.Minute)})
+	if got := m.table.Columns()[colRepo].Width; got != resized {
+		t.Fatalf("Repo width = %d after a poll, want %d (the drag override, undiscarded)", got, resized)
+	}
+}
+
+func TestWindowResizeClearsColumnOverrides(t *testing.T) {
+	m := New(999, false)
+	m.width = 200
+	m.table.SetWidth(200)
+	m.applyWorktrees([]worktree.Entry{wtEntry("/w/a", "a", time.Minute)})
+
+	cols := m.table.Columns()
+	_, originY := m.renderHeader()
+	borderX := repoBorderX(cols)
+
+	updated, _ := m.Update(tea.MouseMsg{X: borderX, Y: originY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.MouseMsg{X: borderX + 5, Y: originY, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
+	m = updated.(Model)
+	if m.colOverrides[colRepo] == 0 {
+		t.Fatal("want a Repo override recorded after the drag")
+	}
+
+	updated, _ = m.Update(tea.WindowSizeMsg{Width: 200, Height: 40})
+	m = updated.(Model)
+	if m.colOverrides != nil {
+		t.Fatalf("colOverrides = %v after a terminal resize, want nil", m.colOverrides)
+	}
+}
+
+func TestMouseClickOffTheHeaderRowDoesNotStartADrag(t *testing.T) {
+	m := New(999, false)
+	m.width = 200
+	m.table.SetWidth(200)
+	m.applyWorktrees([]worktree.Entry{wtEntry("/w/a", "a", time.Minute)})
+
+	cols := m.table.Columns()
+	borderX := repoBorderX(cols)
+	oldRepoWidth := cols[colRepo].Width
+
+	// Well below the header row, e.g. a click on a data row.
+	updated, _ := m.Update(tea.MouseMsg{X: borderX, Y: 50, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.MouseMsg{X: borderX + 5, Y: 50, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
+	m = updated.(Model)
+
+	if got := m.table.Columns()[colRepo].Width; got != oldRepoWidth {
+		t.Fatalf("Repo width = %d, want unchanged %d (click was off the header row)", got, oldRepoWidth)
 	}
 }
