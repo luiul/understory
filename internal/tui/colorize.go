@@ -1,5 +1,5 @@
 // Worktree/Merge column coloring and the selected row's whole-line
-// highlight are both handled by github.com/luiul/loam, the rendering
+// highlight are both handled by github.com/luiul/dashkit/loam, the rendering
 // substrate this and canopy's own internal/tui/colorize.go share (see
 // loam's package doc for why post-processing an already-rendered
 // bubbles/table view, rather than styling table.Row values directly, is
@@ -11,7 +11,7 @@ package tui
 import (
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/luiul/loam"
+	"github.com/luiul/dashkit/loam"
 )
 
 var worktreeStatusStyles = map[string]lipgloss.Style{

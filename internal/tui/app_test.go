@@ -8,8 +8,8 @@ import (
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/luiul/loam"
-	"github.com/luiul/mycelium"
+	"github.com/luiul/dashkit/loam"
+	"github.com/luiul/dashkit/mycelium"
 	"github.com/luiul/understory/internal/worktree"
 )
 

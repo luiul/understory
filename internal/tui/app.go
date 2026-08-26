@@ -9,7 +9,7 @@
 // otherwise fully independent. Enter always opens or focuses a VS Code
 // window on the selected worktree's path, the same behavior `wt`'s own
 // post-start hook and coppice already give a freshly created one — via
-// github.com/luiul/mycelium's shared open-or-focus logic, since canopy
+// github.com/luiul/dashkit/mycelium's shared open-or-focus logic, since canopy
 // needs the exact same switch-or-create behavior for its own agent rows.
 package tui
 
@@ -22,9 +22,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/luiul/loam"
-	"github.com/luiul/mycelium"
-	"github.com/luiul/trellis"
+	"github.com/luiul/dashkit/loam"
+	"github.com/luiul/dashkit/mycelium"
+	"github.com/luiul/dashkit/trellis"
 	"github.com/luiul/understory/internal/worktree"
 )
 
@@ -98,7 +98,7 @@ type Model struct {
 	table table.Model
 
 	// resizer tracks an in-progress mouse column-border drag (see
-	// github.com/luiul/trellis); colOverrides remembers the resulting width
+	// github.com/luiul/dashkit/trellis); colOverrides remembers the resulting width
 	// of whichever column(s) the user has actually dragged, by column index
 	// (see the Column indexes below), so worktreeColumns' own content-driven
 	// recompute — which otherwise runs on every poll, since Repo/Branch grow

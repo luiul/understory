@@ -9,7 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/mattn/go-runewidth"
 
-	"github.com/luiul/loam"
+	"github.com/luiul/dashkit/loam"
 	"github.com/luiul/understory/internal/worktree"
 )
 
