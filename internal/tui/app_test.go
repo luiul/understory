@@ -141,11 +141,47 @@ func TestClampCursor(t *testing.T) {
 }
 
 // mergeBorderX returns the on-screen X of the Merge column's own
-// right-hand border \u2014 the Merge/Path border, the one actually adjacent
-// to Path \u2014 given cols in the same order/widths New builds them.
+// right-hand border — the Merge/Path border, the one actually adjacent
+// to Path — given cols in the same order/widths New builds them.
 func mergeBorderX(cols []table.Column) int {
 	off := loam.ColumnOffsets(cols)[colMerge]
 	return off.Start + off.Width
+}
+
+// TestRenderHeaderOriginYMatchesTheTablesActualHeaderRow is a regression
+// test for an off-by-one that makes every mouse-drag test in this file
+// pass while resizing is completely broken against a real terminal:
+// renderHeader's own tableOriginY must equal the index (0-based, within
+// View()'s full output) of the line where the table's own header row
+// actually lands — not one more than that, however plausible an extra
+// "+1" reads in isolation (View() joins header and the table with a
+// single "\n\n", i.e. exactly one blank separator line, not two).
+// Handle's own Y check (tea.MouseActionPress) is exact-match, not a
+// range, so being off by even one line silently drops every click on
+// the table's own header row — a drag can never even start, with no
+// error or other symptom besides "nothing happens".
+func TestRenderHeaderOriginYMatchesTheTablesActualHeaderRow(t *testing.T) {
+	m := New(999, false)
+	m.width, m.height = 150, 40
+	m.resize()
+	m.applyWorktrees([]worktree.Entry{wtEntry("/w/a", "a", 0)})
+
+	lines := strings.Split(m.View(), "\n")
+	want := -1
+	for i, line := range lines {
+		if strings.Contains(line, "Repo") && strings.Contains(line, "Path") {
+			want = i
+			break
+		}
+	}
+	if want < 0 {
+		t.Fatalf("could not find the table's own header row in View()'s output: %q", m.View())
+	}
+
+	_, got := m.renderHeader()
+	if got != want {
+		t.Fatalf("renderHeader's tableOriginY = %d, want %d (the actual line index of the table's header row in View()'s output)", got, want)
+	}
 }
 
 // repoBorderX returns the on-screen X of the Repo column's own
@@ -190,7 +226,7 @@ func TestMouseDragOnlyResizesTheTwoColumnsStraddlingTheDraggedBorder(t *testing.
 func TestMouseDragBetweenTwoAlreadyMinimalColumnsIsANoOp(t *testing.T) {
 	// Repo and Branch are both already at their own content-driven floor
 	// (no worktrees means both sit at repoColWidth/branchColWidth), so
-	// their shared border has nothing to give in either direction \u2014 and,
+	// their shared border has nothing to give in either direction — and,
 	// crucially, doesn't silently resize Path instead the way a single
 	// global "flex" sink column once would have.
 	m := New(999, false)

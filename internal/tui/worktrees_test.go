@@ -460,7 +460,7 @@ func TestWorktreeColumnsAppliesAnOverrideWiderThanTheNaturalFloor(t *testing.T) 
 func TestWorktreeColumnsDropsAnOverrideNarrowerThanAFreshlyPolledLongerLabel(t *testing.T) {
 	// An override recorded against a short label (e.g. from an earlier
 	// poll's own drag) must not truncate a longer one a later poll
-	// brings in \u2014 unlike canopy's fixed columns, Repo/Branch's own floor
+	// brings in — unlike canopy's fixed columns, Repo/Branch's own floor
 	// moves with the data.
 	long := wtEntry("/w/a", "a", 0)
 	long.Owner = "hellofresh"
