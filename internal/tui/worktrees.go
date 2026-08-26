@@ -13,12 +13,13 @@ import (
 	"github.com/luiul/understory/internal/worktree"
 )
 
-// worktreeColWidth constants for the view's columns. repoColWidth is only
-// a floor (see repoColumnWidth): the Repo column itself grows to fit
-// whichever displayed repo label is longest, so a long owner/repo name
-// is never truncated the way a fixed width would. Branch/Updated/
-// Worktree/Merge stay fixed; Path gets whatever's left after all of
-// those, floored at minPathWidth.
+// worktreeColWidth constants for the view's columns. repoColWidth and
+// branchColWidth are only floors (see repoColumnWidth/branchColumnWidth):
+// the Repo and Branch columns each grow to fit whichever displayed
+// label/branch name is longest, so a long owner/repo name or branch name
+// is never truncated the way a fixed width would. Updated/Worktree/Merge
+// stay fixed; Path gets whatever's left after all of those, floored at
+// minPathWidth.
 const (
 	repoColWidth     = 16
 	branchColWidth   = 20
@@ -60,14 +61,29 @@ func repoColumnWidth(worktrees []worktree.Entry) int {
 	return width
 }
 
+// branchColumnWidth is the Branch column's width for the given worktree
+// set: branchColWidth's floor, or the longest branch name's own display
+// width if that's wider (same reasoning as repoColumnWidth: a fixed
+// width truncated long branch names instead of showing them in full).
+func branchColumnWidth(worktrees []worktree.Entry) int {
+	width := branchColWidth
+	for _, w := range worktrees {
+		if lw := runewidth.StringWidth(w.Branch); lw > width {
+			width = lw
+		}
+	}
+	return width
+}
+
 // worktreeColumns builds the view's columns for the given terminal width
-// and worktree set: Repo grows to fit its widest displayed label (see
-// repoColumnWidth), Branch/Updated/Worktree/Merge are fixed width, and
-// Path fills whatever's left.
+// and worktree set: Repo and Branch each grow to fit their widest
+// displayed value (see repoColumnWidth/branchColumnWidth),
+// Updated/Worktree/Merge are fixed width, and Path fills whatever's
+// left.
 func worktreeColumns(width int, worktrees []worktree.Entry) []table.Column {
 	cols := []table.Column{
 		{Title: "Repo", Width: repoColumnWidth(worktrees)},
-		{Title: "Branch", Width: branchColWidth},
+		{Title: "Branch", Width: branchColumnWidth(worktrees)},
 		{Title: "Updated", Width: updatedColWidth},
 		{Title: "Worktree", Width: worktreeColWidth},
 		{Title: "Merge", Width: mergeColWidth},
@@ -168,9 +184,10 @@ func resolveWorktreeCursor(displayed []worktree.Entry, path string, fallback int
 // applyWorktrees stores a fresh worktree poll, keeps whichever worktree
 // (by path) was previously selected selected, and rebuilds the table's
 // columns and rows. Columns are rebuilt here too, not just in resize:
-// repoColumnWidth depends on the worktree set itself, so a freshly
-// polled repo with a longer owner/repo label needs the Repo column
-// widened immediately, not just on the next terminal resize.
+// repoColumnWidth/branchColumnWidth depend on the worktree set itself,
+// so a freshly polled repo with a longer owner/repo label or branch
+// name needs the Repo/Branch column widened immediately, not just on
+// the next terminal resize.
 func (m *Model) applyWorktrees(fresh []worktree.Entry) {
 	oldCursor := clampCursor(m.table.Cursor(), len(m.displayedWorktrees()))
 	oldDisplayed := m.displayedWorktrees() // still against the OLD m.worktrees
