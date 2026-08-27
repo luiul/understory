@@ -90,13 +90,24 @@ type Entry struct {
 	// meaningful once that's true; it's purely a removal candidate.
 	Stale bool
 	// MergeStatus is this branch's relationship to the repo's main branch,
-	// mirroring coppice's own merge-status derivation: MergeStatusMerged
-	// once `wt`'s main_state reports "empty" or "integrated" (nothing left
-	// to merge), MergeStatusUnmerged once it reports "ahead" (still has
-	// commits main doesn't), MergeStatusUnknown for anything else `wt`
-	// might report, and "" (not applicable) for the main worktree itself
-	// (nothing to merge it into) or a Stale one (its relationship to main
-	// is moot once the worktree directory is already gone).
+	// a triage answer to "what does this worktree need?" derived from
+	// `wt`'s own main_state (which `wt` resolves via git, simulating the
+	// merge with `git merge-tree` for the conflict case). `wt` documents
+	// nine main_state values; they collapse into four display states by
+	// action class: MergeStatusMerged for "empty", "integrated",
+	// "same_commit", and "behind" (nothing to integrate, main already
+	// contains everything, so the worktree is safe to remove),
+	// MergeStatusUnmerged for "ahead" and "diverged" (has commits main
+	// doesn't, but merges cleanly), MergeStatusConflict for
+	// "would_conflict" (has commits main doesn't, and merging would
+	// conflict: the one state that changes the action class, and time
+	// sensitive, since a conflicting branch gets worse the longer main
+	// moves), and MergeStatusUnknown for "orphan", an absent main_state,
+	// or anything unrecognized `wt` might report in the future (wt
+	// genuinely can't relate the branch to main). "" (not applicable)
+	// for the main worktree itself (nothing to merge it into) or a Stale
+	// one (its relationship to main is moot once the worktree directory
+	// is already gone).
 	MergeStatus string
 	// Symbols is wt's own compact status glyph string (dirty/ahead/behind,
 	// e.g. "!^|"), reused as-is rather than re-deriving ahead/behind
@@ -111,6 +122,7 @@ type Entry struct {
 const (
 	MergeStatusMerged   = "merged"
 	MergeStatusUnmerged = "unmerged"
+	MergeStatusConflict = "conflict"
 	MergeStatusUnknown  = "unknown"
 )
 
@@ -318,16 +330,22 @@ func parseListOutput(out []byte) ([]Entry, error) {
 
 // mergeStatus derives Entry.MergeStatus from `wt`'s own reporting: see
 // Entry.MergeStatus's doc for what each value means and when it applies.
+// The mapping stays centralized in this one function so that wt's JSON
+// schema 2 (which moves this vocabulary to display.state) and any future
+// main_state values each touch exactly one place; unrecognized values
+// degrade to MergeStatusUnknown rather than overstating certainty.
 func mergeStatus(isMain, stale bool, mainState string) string {
 	if isMain || stale {
 		return ""
 	}
 	switch mainState {
-	case "empty", "integrated":
+	case "empty", "integrated", "same_commit", "behind":
 		return MergeStatusMerged
-	case "ahead":
+	case "ahead", "diverged":
 		return MergeStatusUnmerged
-	default:
+	case "would_conflict":
+		return MergeStatusConflict
+	default: // "orphan", absent, or a future value wt adds later
 		return MergeStatusUnknown
 	}
 }

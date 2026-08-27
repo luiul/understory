@@ -275,23 +275,28 @@ func TestWorktreeSummaryLineBreaksDownByStatusInSalienceOrder(t *testing.T) {
 	stale := wtEntry("/w/stale", "stale-branch", 0)
 	stale.Stale = true
 
+	conflict := wtEntry("/w/conflict", "conflict-branch", 0)
+	conflict.MergeStatus = worktree.MergeStatusConflict
+
 	merged := wtEntry("/w/merged", "merged-branch", 0)
 	merged.MergeStatus = worktree.MergeStatusMerged
 
 	clean := wtEntry("/w/clean", "clean-branch", 0)
 
-	got := worktreeSummaryLine([]worktree.Entry{dirty, stale, merged, clean})
+	got := worktreeSummaryLine([]worktree.Entry{dirty, stale, conflict, merged, clean})
 
-	// Order matters: dirty, stale, merged, clean, most actionable first.
+	// Order matters: dirty, stale, conflict, merged, clean, most
+	// actionable first.
 	dirtyAt := strings.Index(got, "1 dirty")
 	staleAt := strings.Index(got, "1 stale")
+	conflictAt := strings.Index(got, "1 conflict")
 	mergedAt := strings.Index(got, "1 merged")
 	cleanAt := strings.Index(got, "1 clean")
-	if dirtyAt < 0 || staleAt < 0 || mergedAt < 0 || cleanAt < 0 {
-		t.Fatalf("got %q, want all four buckets present", got)
+	if dirtyAt < 0 || staleAt < 0 || conflictAt < 0 || mergedAt < 0 || cleanAt < 0 {
+		t.Fatalf("got %q, want all five buckets present", got)
 	}
-	if !(dirtyAt < staleAt && staleAt < mergedAt && mergedAt < cleanAt) {
-		t.Fatalf("got %q, want dirty, stale, merged, clean in that left-to-right order", got)
+	if !(dirtyAt < staleAt && staleAt < conflictAt && conflictAt < mergedAt && mergedAt < cleanAt) {
+		t.Fatalf("got %q, want dirty, stale, conflict, merged, clean in that left-to-right order", got)
 	}
 }
 
@@ -314,9 +319,28 @@ func TestWorktreeSummaryLineStaleWinsOverDirtyAndMerged(t *testing.T) {
 	}
 }
 
+func TestWorktreeSummaryLineConflictIsItsOwnBucketNotClean(t *testing.T) {
+	// The classification switch's default bucket is clean, so a
+	// MergeStatus without its own explicit case would be summarized as
+	// "nothing outstanding". A conflicting branch is the exact opposite
+	// of that (merging would conflict, and it gets worse the longer main
+	// moves), so it must render as its own bucket.
+	w := wtEntry("/w/a", "a", 0)
+	w.MergeStatus = worktree.MergeStatusConflict
+
+	got := worktreeSummaryLine([]worktree.Entry{w})
+
+	if !strings.Contains(got, "1 conflict") {
+		t.Fatalf("got %q, want the conflict bucket", got)
+	}
+	if strings.Contains(got, "clean") {
+		t.Fatalf("got %q, want no clean bucket for a conflicting entry", got)
+	}
+}
+
 func TestWorktreeSummaryLineOmitsZeroCountBuckets(t *testing.T) {
 	got := worktreeSummaryLine([]worktree.Entry{wtEntry("/w/a", "a", 0)}) // clean only
-	for _, bucket := range []string{"dirty", "stale", "merged", "unknown"} {
+	for _, bucket := range []string{"dirty", "stale", "conflict", "merged", "unknown"} {
 		if strings.Contains(got, bucket) {
 			t.Fatalf("got %q, want no %q bucket when its count is 0", got, bucket)
 		}
@@ -327,8 +351,9 @@ func TestWorktreeSummaryLineOmitsZeroCountBuckets(t *testing.T) {
 }
 
 func TestWorktreeSummaryLineUnknownOnly(t *testing.T) {
-	// Entry.MergeStatus's doc: MergeStatusUnknown covers anything `wt`
-	// reports beyond empty/integrated/ahead. It must render as its own
+	// Entry.MergeStatus's doc: MergeStatusUnknown covers what `wt` can't
+	// relate to main at all (orphan, absent, or unrecognized states). It
+	// must render as its own
 	// "unknown" bucket, not get silently folded into (and overstate the
 	// confidence of) "clean".
 	w := wtEntry("/w/a", "a", 0)
@@ -373,22 +398,24 @@ func TestWorktreeSummaryLineBucketCountsSumToTotal(t *testing.T) {
 	// Regression guard for the classification switch's mutual exclusivity:
 	// every entry must land in exactly one bucket, so the digits across all
 	// rendered buckets must always add up to the total worktree count, no
-	// matter how the five-way classification evolves later.
+	// matter how the six-way classification evolves later.
 	dirty := wtEntry("/w/dirty", "dirty-branch", 0)
 	dirty.Dirty = true
 	stale := wtEntry("/w/stale", "stale-branch", 0)
 	stale.Stale = true
+	conflict := wtEntry("/w/conflict", "conflict-branch", 0)
+	conflict.MergeStatus = worktree.MergeStatusConflict
 	merged := wtEntry("/w/merged", "merged-branch", 0)
 	merged.MergeStatus = worktree.MergeStatusMerged
 	clean := wtEntry("/w/clean", "clean-branch", 0)
 	unknown := wtEntry("/w/unknown", "unknown-branch", 0)
 	unknown.MergeStatus = worktree.MergeStatusUnknown
 
-	entries := []worktree.Entry{dirty, stale, merged, clean, unknown}
+	entries := []worktree.Entry{dirty, stale, conflict, merged, clean, unknown}
 	got := worktreeSummaryLine(entries)
 
 	sum := 0
-	for _, bucket := range []string{"dirty", "stale", "merged", "clean", "unknown"} {
+	for _, bucket := range []string{"dirty", "stale", "conflict", "merged", "clean", "unknown"} {
 		matches := regexp.MustCompile(`(\d+) ` + bucket).FindStringSubmatch(got)
 		if matches == nil {
 			t.Fatalf("got %q, want a %q bucket present", got, bucket)

@@ -44,8 +44,8 @@ const (
 // createdContentWidth, worktreeContentWidth, and mergeContentWidth are
 // the widest values the Created/Worktree/Merge columns ever display:
 // humanizeSince tops out at "23h59m" (6) before switching to "%dd",
-// the working-tree states are all five letters, and "unmerged" is the
-// longest merge status. These are the columns' drag minimums (see
+// the working-tree states are all five letters, and "unmerged" and
+// "conflict" tie for the longest merge status at eight. These are the columns' drag minimums (see
 // columnMinWidths): a user dragging one of them narrower than its
 // default truncates the header title ("Worktre…") but never a value —
 // the same "a drag is a deliberate choice" deal Repo/Branch get, which
@@ -462,13 +462,16 @@ func noWorktreesMessage() string {
 }
 
 // worktreeSummaryLine returns a one-line "N worktrees: N dirty · N stale ·
-// N merged · N clean · N unknown" breakdown, one mutually-exclusive bucket
-// per worktree (most-actionable-first classification, same spirit as
-// canopy's own summaryLine over its State column, folded down to a
-// single dimension since "needs a look" is really one axis here even
-// though it's backed by two Entry fields): Stale wins first (see
-// Entry.Stale's doc: Dirty/MergeStatus are meaningless once true), then
-// Dirty (uncommitted work, worth a look now), then a merged branch
+// N conflict · N merged · N clean · N unknown" breakdown, one
+// mutually-exclusive bucket per worktree (most-actionable-first
+// classification, same spirit as canopy's own summaryLine over its State
+// column, folded down to a single dimension since "needs a look" is
+// really one axis here even though it's backed by two Entry fields):
+// Stale wins first (see Entry.Stale's doc: Dirty/MergeStatus are
+// meaningless once true), then Dirty (uncommitted work, worth a look
+// now), then a conflicting branch (MergeStatusConflict: the one Merge
+// state that gets worse on its own the longer main moves, so it sorts
+// ahead of every other merge relationship), then a merged branch
 // (nothing left to do but it's a removal candidate), then clean
 // (still-open work with nothing outstanding). unknown is its own bucket
 // rather than folded into clean: when `wt` couldn't determine a branch's
@@ -478,7 +481,10 @@ func noWorktreesMessage() string {
 // of silently overstating certainty. It sorts last since it's exactly as
 // low-priority as clean in the Merge column's own coloring (colorize.go's
 // mergeStatusStyles gives "unknown" the same dim grey as "-"), just
-// without a confirmed merge relationship to back that up. Colored to
+// without a confirmed merge relationship to back that up. Every
+// MergeStatus value needs its own explicit case here: the switch's
+// default bucket is clean, so an unhandled status would be summarized
+// as "nothing outstanding" when it might be anything but. Colored to
 // match the Worktree/Merge table columns via the same style lookups.
 // Returns "" if there are no worktrees, since the placeholder row
 // already says so.
@@ -494,6 +500,8 @@ func worktreeSummaryLine(entries []worktree.Entry) string {
 			counts["stale"]++
 		case e.Dirty:
 			counts["dirty"]++
+		case e.MergeStatus == worktree.MergeStatusConflict:
+			counts["conflict"]++
 		case e.MergeStatus == worktree.MergeStatusMerged:
 			counts["merged"]++
 		case e.MergeStatus == worktree.MergeStatusUnknown:
@@ -504,19 +512,19 @@ func worktreeSummaryLine(entries []worktree.Entry) string {
 	}
 
 	var parts []string
-	for _, bucket := range []string{"dirty", "stale", "merged", "clean", "unknown"} {
+	for _, bucket := range []string{"dirty", "stale", "conflict", "merged", "clean", "unknown"} {
 		n := counts[bucket]
 		if n == 0 {
 			continue
 		}
-		// merged/unknown are Merge-column words (mergeStatusStyles),
-		// dirty/stale/clean are Worktree-column words
+		// merged/conflict/unknown are Merge-column words
+		// (mergeStatusStyles), dirty/stale/clean are Worktree-column words
 		// (worktreeStatusStyles); looking each up in its own map rather
 		// than reusing one for both keeps this tied to the same source
 		// of truth the table itself renders from, even though "clean"
 		// and "unknown" happen to resolve to the same dim grey today.
 		style := worktreeStatusStyle(bucket)
-		if bucket == "merged" || bucket == "unknown" {
+		if bucket == "merged" || bucket == "conflict" || bucket == "unknown" {
 			style = mergeStatusStyle(bucket)
 		}
 		parts = append(parts, style.Render(fmt.Sprintf("%d %s", n, bucket)))

@@ -22,7 +22,8 @@ var worktreeStatusStyles = map[string]lipgloss.Style{
 
 var mergeStatusStyles = map[string]lipgloss.Style{
 	"merged":   lipgloss.NewStyle().Foreground(lipgloss.Color("10")),  // safe to remove
-	"unmerged": lipgloss.NewStyle().Foreground(lipgloss.Color("11")),  // still has commits main doesn't
+	"unmerged": lipgloss.NewStyle().Foreground(lipgloss.Color("11")),  // still has commits main doesn't, merges cleanly
+	"conflict": lipgloss.NewStyle().Foreground(lipgloss.Color("9")),   // merging would conflict: act before main moves further
 	"unknown":  lipgloss.NewStyle().Foreground(lipgloss.Color("240")), // wt couldn't tell
 	"-":        lipgloss.NewStyle().Foreground(lipgloss.Color("240")), // not applicable (main, or stale)
 }
@@ -50,7 +51,11 @@ var rowHighlightStyle = lipgloss.NewStyle().Background(lipgloss.AdaptiveColor{Li
 // tools read consistently; "stale" (a removal candidate) gets its own
 // louder red, since coppice never renders that word itself (its `_age_days`
 // returns it unstyled, folded into the Age column rather than a status
-// column of its own).
+// column of its own). "conflict" is understory-only the same way (coppice
+// never surfaces wt's would_conflict state as its own word) and borrows
+// the same bright red: it is the one Merge state that gets worse on its
+// own the longer main moves, so it should shout louder than unmerged's
+// yellow.
 func worktreeStatusStyle(word string) lipgloss.Style {
 	if s, ok := worktreeStatusStyles[word]; ok {
 		return s

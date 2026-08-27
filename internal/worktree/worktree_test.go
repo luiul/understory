@@ -150,15 +150,25 @@ func TestParseListOutputNonPrunableWorktreeIsNotStale(t *testing.T) {
 }
 
 func TestMergeStatusMirrorsMainStateForAnOrdinaryWorktree(t *testing.T) {
+	// All nine main_state values wt documents, plus absent and
+	// unrecognized ones, mapped by action class (see Entry.MergeStatus's
+	// doc): nothing-to-integrate states are merged, cleanly-mergeable
+	// states are unmerged, only would_conflict is a conflict, and what wt
+	// genuinely can't relate to main is unknown.
 	cases := []struct {
 		mainState string
 		want      string
 	}{
 		{"empty", MergeStatusMerged},
 		{"integrated", MergeStatusMerged},
+		{"same_commit", MergeStatusMerged},
+		{"behind", MergeStatusMerged},
 		{"ahead", MergeStatusUnmerged},
-		{"diverged", MergeStatusUnknown},
+		{"diverged", MergeStatusUnmerged},
+		{"would_conflict", MergeStatusConflict},
+		{"orphan", MergeStatusUnknown},
 		{"", MergeStatusUnknown},
+		{"some_future_state", MergeStatusUnknown},
 	}
 	for _, c := range cases {
 		if got := mergeStatus(false, false, c.mainState); got != c.want {
