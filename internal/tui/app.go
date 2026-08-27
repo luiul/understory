@@ -9,8 +9,9 @@
 // otherwise fully independent. Enter always opens or focuses a VS Code
 // window on the selected worktree's path, the same behavior `wt`'s own
 // post-start hook and coppice already give a freshly created one — via
-// github.com/luiul/dashkit/mycelium's shared open-or-focus logic, since canopy
-// needs the exact same switch-or-create behavior for its own agent rows.
+// github.com/luiul/dashkit/mycelium's shared open-or-focus logic, since
+// canopy needs the exact same switch-or-create behavior for its own
+// agent rows.
 package tui
 
 import (
@@ -98,19 +99,25 @@ type Model struct {
 	table table.Model
 
 	// resizer tracks an in-progress mouse column-border drag (see
-	// github.com/luiul/dashkit/trellis); colOverrides remembers the resulting width
-	// of whichever column(s) the user has actually dragged, by column index
-	// (see the Column indexes below), so worktreeColumns' own content-driven
-	// recompute — which otherwise runs on every poll, since Repo/Branch grow
-	// to fit whatever's currently longest — doesn't silently discard a resize
-	// the very next time new worktree data comes in. Cleared on a terminal
-	// resize (see Update's WindowSizeMsg case): a genuinely new terminal
-	// width invalidates the old distribution of space entirely, the same
-	// reset both dashboards' own layout already gets from a resize.
+	// github.com/luiul/dashkit/trellis); colOverrides remembers the
+	// resulting width of the two columns each drag has actually moved (a
+	// drag always moves two adjacent columns at once; see trellis.Model.
+	// Handle's own doc), by column index (see the Column indexes in
+	// worktrees.go). Only the dragged pair is ever recorded: recording
+	// every column's current width would pin columns the user never
+	// touched, freezing Repo/Branch's grow-to-fit sizing the moment any
+	// single drag happens. worktreeColumns applies these absolutely (see
+	// its own doc — a drag is a deliberate pin, in both directions) every
+	// time columns are rebuilt, so a fresh poll doesn't silently discard
+	// an earlier resize. Cleared whenever a WindowSizeMsg arrives (see
+	// Update): a genuinely new terminal width invalidates the old
+	// distribution of space entirely, so resize starts fresh rather than
+	// fighting stale overrides sized for a different width. Path never
+	// carries an override that worktreeColumns applies — same as canopy's
+	// own Location, it always absorbs whatever's left over after every
+	// other column's own effective width is accounted for.
 	colOverrides map[int]int
-	// resizer tracks an in-progress mouse column-border drag; see
-	// colOverrides' own doc above for how its result gets persisted.
-	resizer trellis.Model
+	resizer      trellis.Model
 
 	notification  string
 	notifyIsError bool
@@ -179,9 +186,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		// A new terminal width invalidates whatever distribution of space a
-		// prior drag settled on — resize() is about to recompute every
-		// column from scratch against the new width, so any stale override
-		// dropped in here first rather than fighting that recompute.
+		// prior drag settled on — resize is about to recompute every column
+		// from scratch against the new width, so any stale override is
+		// dropped first rather than fighting that recompute.
 		m.colOverrides = nil
 		m.table.SetWidth(msg.Width)
 		m.table.SetHeight(clampInt(msg.Height-6, 3, 1000))
@@ -191,12 +198,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseMsg:
 		_, originY := m.renderHeader()
 		cols := m.table.Columns()
-		widths, changed := m.resizer.Handle(msg, cols, worktreeMinWidths(), colPath, 0, originY)
+		widths, changed := m.resizer.Handle(msg, cols, columnMinWidths(), 0, originY)
 		if changed {
 			if m.colOverrides == nil {
 				m.colOverrides = map[int]int{}
 			}
-			m.colOverrides[m.resizer.DragColumn()] = widths[m.resizer.DragColumn()]
+			// A drag always moves the dragged column and its right-hand
+			// neighbor together (see trellis.Model.Handle's own doc), so
+			// both of their new widths need remembering — and no others:
+			// recording every column's width would pin columns this drag
+			// never touched (see colOverrides' own doc).
+			dragged := m.resizer.DragColumn()
+			m.colOverrides[dragged] = widths[dragged]
+			m.colOverrides[dragged+1] = widths[dragged+1]
 			m.table.SetColumns(trellis.Apply(cols, widths))
 		}
 		return m, nil
@@ -292,15 +306,16 @@ func (m *Model) resize() {
 	m.table.SetCursor(cursor)
 }
 
-// renderHeader builds the header block (title, plus a worktree summary
-// line once there's anything to summarize) and reports how many terminal
-// rows precede the table's own header row: the header block's own line
-// count, plus the blank separator line View always inserts before the
-// table. View and the tea.MouseMsg case in Update both need exactly this
-// — View to render the text, mouse handling to know whether a click
-// landed on the table's own header row (see trellis.Model.Handle's doc) —
-// so both call this one helper rather than keeping two copies of the same
-// line-counting logic in sync by hand.
+// renderHeader builds the header block (title, plus an optional summary
+// line) and reports how many terminal rows precede the table's own
+// header row: the header block's own line count, plus the blank
+// separator line View always inserts before the table. View and the
+// tea.MouseMsg case in Update both need exactly this — View to render
+// the text, mouse handling to know whether a click landed on the
+// table's own header row (see trellis.Model.Handle's doc) — so both call
+// this one helper rather than keeping two copies of the same line-
+// counting logic in sync by hand; the same split canopy's own
+// internal/tui/app.go already uses.
 func (m Model) renderHeader() (text string, tableOriginY int) {
 	text = titleStyle.Render("understory") + subtleStyle.Render(" — worktrees on this machine")
 	lines := 1
@@ -329,6 +344,12 @@ func (m Model) View() string {
 	}
 
 	tableView := colorizeRows(m.table.View(), m.table.Columns(), colWorktree, colMerge)
+	// Marks each column border on the header row with a visible divider
+	// (see loam.DrawHeaderBorders' own doc) — otherwise the only cue for
+	// where a mouse drag needs to land is bubbles/table's own blank
+	// 2-space inter-cell gap, which doesn't look any different from the
+	// padding inside a cell.
+	tableView = loam.DrawHeaderBorders(tableView, m.table.Columns(), subtleStyle)
 	return header + "\n\n" + tableView + "\n\n" + footer + "\n"
 }
 

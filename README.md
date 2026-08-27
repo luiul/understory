@@ -54,7 +54,7 @@ for the one piece of that old view intentionally not carried over.
 understory — worktrees on this machine
 2 worktrees
 
-Repo                  Branch          Updated   Worktree  Merge      Path
+Repo                  Branch          Created   Worktree  Merge      Path
 luiul/understory      hide-main-wt    12s       dirty     unmerged   ~/worktrees/.../understory
 hellofresh/isa-orch…  fix-writeback   3d        clean     unmerged   ~/worktrees/.../isa-orchestration
 
@@ -63,15 +63,6 @@ hellofresh/isa-orch…  fix-writeback   3d        clean     unmerged   ~/worktre
 
 (the currently selected row also gets a full-width grey highlight in the
 real terminal output, not shown here since it's just a background color)
-
-Any column's border can be dragged with the mouse to widen or narrow it —
-Path absorbs whatever a drag adds to or takes from anywhere else, so the
-table's own total width never changes, only how it's divided up (see
-[`github.com/luiul/dashkit/trellis`](https://github.com/luiul/dashkit/tree/main/trellis)
-below). A
-resize sticks across the next poll (`wt list` re-running doesn't discard
-it), but resets on a terminal resize, since that already recomputes every
-column's width from scratch against the new terminal width anyway.
 
 Each repo's main worktree (`Entry.IsMain`: the base-branch checkout
 `wt`/coppice created the others alongside, not necessarily a branch named
@@ -87,16 +78,39 @@ with rows grouped by repo, most of a block's rows look alike (blank Repo
 cell, similar Branch/Worktree/Merge text), so a highlighted row is much
 easier to keep track of while scrolling than a single character off to
 the side. Path shortens a leading home-directory prefix to `~`, same as
-your shell prompt. Repo grows to fit whichever owner/repo label is
-longest across the currently displayed worktrees, rather than a fixed
-width, so a long name is never truncated (unlike Branch, which is
-fixed-width and can still ellipsize). Worktree/Merge are plain-word
-renderings of `wt`'s own compact status glyphs (dirty/ahead/behind),
-rather than the glyphs themselves.
+your shell prompt. Repo and Branch each grow to fit whichever label or
+branch name is longest across the currently displayed worktrees, rather
+than a fixed width, so a long name is never truncated as long as the
+terminal has room for everything; on one that doesn't, Repo/Branch shed
+that growth first (longest-first, so truncation hits the longest values
+first) and only then does Path dip below its own preferred width — the
+table never overflows the terminal's right edge. Worktree/Merge are
+plain-word renderings of `wt`'s own compact status glyphs
+(dirty/ahead/behind), rather than the glyphs themselves.
+
+Each internal column border can be dragged with the mouse to widen or
+narrow it: the two columns it sits between trade width between
+themselves, so the table's own total width never changes, only how it's
+divided up between whichever two columns you actually grabbed (see
+[`github.com/luiul/dashkit/trellis`](https://github.com/luiul/dashkit/tree/main/trellis),
+the same package canopy uses for its own table). A visible divider marks
+each border on the header row (see
+[`github.com/luiul/dashkit/loam`](https://github.com/luiul/dashkit/tree/main/loam)'s
+`DrawHeaderBorders`) so there's something to aim the drag at, rather than
+an invisible 2-space gap. Every border can move in both directions:
+each column can shrink down to the width its values still fit (Repo/
+Branch their defaults, Created/Worktree/Merge their widest possible
+value — a narrower drag truncates only the header title, never a
+value), and Path down to its own floor. A resize sticks across polls:
+the dragged column's width is pinned exactly where you left it, even
+when a freshly polled longer label would have grown it (the label
+ellipsizes until you drag wider again) — only a terminal resize resets
+every column, since that already recomputes Path's own width from
+scratch against the new terminal width anyway. Columns you never
+dragged keep their automatic sizing.
 
 Enter opens (or, if a window is already open on that path, focuses) a VS
-Code window there via
-[`github.com/luiul/dashkit/mycelium`](https://github.com/luiul/dashkit/tree/main/mycelium)'s
+Code window there via [`github.com/luiul/dashkit/mycelium`](https://github.com/luiul/dashkit/tree/main/mycelium)'s
 shared open-or-focus logic: it checks for an already-open window itself
 first, via AppleScript against each window's title, and only forces a
 brand-new one (`-n`) once it knows none is already open. `code
@@ -151,13 +165,25 @@ dashboard.
   open-on-Enter via
   [`github.com/luiul/dashkit/mycelium`](https://github.com/luiul/dashkit/tree/main/mycelium)'s
   shared open-or-focus logic — the same package canopy uses to jump to
-  whichever window is running a given agent — notifications, and mouse
-  column resizing via
-  [`github.com/luiul/dashkit/trellis`](https://github.com/luiul/dashkit/tree/main/trellis)
-  — the same package canopy uses for its own table).
+  whichever window is running a given agent — notifications).
 - `cmd/understory`: the CLI entry point (flags, version).
 
 ## Install
+
+```bash
+cd understory
+scripts/install.sh   # builds, installs to ~/.local/bin, code-signs with a
+                     # stable local identity so macOS Accessibility/
+                     # Automation permission (needed by mycelium's
+                     # window-detection AppleScript) survives future
+                     # rebuilds instead of resetting every time -- see
+                     # the script's own comment for why and how to set
+                     # up that signing identity once
+```
+
+Or, without the stable signature (fine for a one-off build, but expect
+to re-grant Accessibility/Automation to VS Code + System Events after
+every rebuild):
 
 ```bash
 cd understory

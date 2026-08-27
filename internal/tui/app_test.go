@@ -100,18 +100,18 @@ func TestShortenHomeReplacesTheHomePrefixWithATilde(t *testing.T) {
 func TestCursorSentinelFollowsArrowKeysBetweenPolls(t *testing.T) {
 	m := New(999, false)
 	m.applyWorktrees([]worktree.Entry{wtEntry("/w/a", "a", time.Minute), wtEntry("/w/b", "b", 2*time.Minute)})
-	if got := m.table.Rows()[0][colUpdated]; !strings.Contains(got, loam.Sentinel) {
-		t.Fatalf("got %q, want loam.Sentinel on row 0's Updated cell right after applyWorktrees", got)
+	if got := m.table.Rows()[0][colCreated]; !strings.Contains(got, loam.Sentinel) {
+		t.Fatalf("got %q, want loam.Sentinel on row 0's Created cell right after applyWorktrees", got)
 	}
 
 	// Moving down (without a poll in between) must move the tag too, not
 	// just bubbles/table's own internal cursor.
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	mm := updated.(Model)
-	if got := mm.table.Rows()[0][colUpdated]; strings.Contains(got, loam.Sentinel) {
-		t.Fatalf("got %q, want row 0's Updated cell cleared of loam.Sentinel after moving down", got)
+	if got := mm.table.Rows()[0][colCreated]; strings.Contains(got, loam.Sentinel) {
+		t.Fatalf("got %q, want row 0's Created cell cleared of loam.Sentinel after moving down", got)
 	}
-	if got := mm.table.Rows()[1][colUpdated]; !strings.Contains(got, loam.Sentinel) {
+	if got := mm.table.Rows()[1][colCreated]; !strings.Contains(got, loam.Sentinel) {
 		t.Fatalf("got %q, want row 1 to carry loam.Sentinel after moving down", got)
 	}
 }
@@ -140,81 +140,309 @@ func TestClampCursor(t *testing.T) {
 	}
 }
 
-// repoBorderX returns the on-screen X of the Repo column's own right-hand
-// border, given cols in the same order/widths worktreeColumns builds them.
+// mergeBorderX returns the on-screen X of the Merge column's own
+// right-hand border — the Merge/Path border, the one actually adjacent
+// to Path — given cols in the same order/widths New builds them.
+func mergeBorderX(cols []table.Column) int {
+	off := loam.ColumnOffsets(cols)[colMerge]
+	return off.Start + off.Width
+}
+
+// TestRenderHeaderOriginYMatchesTheTablesActualHeaderRow is a regression
+// test for an off-by-one that makes every mouse-drag test in this file
+// pass while resizing is completely broken against a real terminal:
+// renderHeader's own tableOriginY must equal the index (0-based, within
+// View()'s full output) of the line where the table's own header row
+// actually lands — not one more than that, however plausible an extra
+// "+1" reads in isolation (View() joins header and the table with a
+// single "\n\n", i.e. exactly one blank separator line, not two).
+// Handle's own Y check (tea.MouseActionPress) is exact-match, not a
+// range, so being off by even one line silently drops every click on
+// the table's own header row — a drag can never even start, with no
+// error or other symptom besides "nothing happens".
+func TestRenderHeaderOriginYMatchesTheTablesActualHeaderRow(t *testing.T) {
+	m := New(999, false)
+	m.width, m.height = 150, 40
+	m.resize()
+	m.applyWorktrees([]worktree.Entry{wtEntry("/w/a", "a", 0)})
+
+	lines := strings.Split(m.View(), "\n")
+	want := -1
+	for i, line := range lines {
+		if strings.Contains(line, "Repo") && strings.Contains(line, "Path") {
+			want = i
+			break
+		}
+	}
+	if want < 0 {
+		t.Fatalf("could not find the table's own header row in View()'s output: %q", m.View())
+	}
+
+	_, got := m.renderHeader()
+	if got != want {
+		t.Fatalf("renderHeader's tableOriginY = %d, want %d (the actual line index of the table's header row in View()'s output)", got, want)
+	}
+}
+
+// repoBorderX returns the on-screen X of the Repo column's own
+// right-hand border, i.e. the Repo/Branch border.
 func repoBorderX(cols []table.Column) int {
 	off := loam.ColumnOffsets(cols)[colRepo]
 	return off.Start + off.Width
 }
 
-func TestMouseDragWidensRepoColumnAndShrinksPathToMatch(t *testing.T) {
+func TestMouseDragOnlyResizesTheTwoColumnsStraddlingTheDraggedBorder(t *testing.T) {
 	m := New(999, false)
-	m.width = 200
-	m.table.SetWidth(200)
-	m.applyWorktrees([]worktree.Entry{wtEntry("/w/a", "a", time.Minute)})
+	m.width, m.height = 150, 40
+	m.resize()
+
+	cols := m.table.Columns()
+	_, originY := m.renderHeader()
+	borderX := mergeBorderX(cols)
+	oldMergeWidth, oldPathWidth := cols[colMerge].Width, cols[colPath].Width
+	oldRepoWidth, oldCreatedWidth := cols[colRepo].Width, cols[colCreated].Width
+
+	updated, _ := m.Update(tea.MouseMsg{X: borderX, Y: originY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.MouseMsg{X: borderX + 4, Y: originY, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
+	m = updated.(Model)
+
+	gotCols := m.table.Columns()
+	if got, want := gotCols[colMerge].Width, oldMergeWidth+4; got != want {
+		t.Fatalf("Merge width = %d, want %d", got, want)
+	}
+	if got, want := gotCols[colPath].Width, oldPathWidth-4; got != want {
+		t.Fatalf("Path width = %d, want %d (its own left-hand neighbor absorbs the drag)", got, want)
+	}
+	// Every column not touching the dragged border must stay put.
+	if got := gotCols[colRepo].Width; got != oldRepoWidth {
+		t.Fatalf("Repo width = %d, want unchanged %d", got, oldRepoWidth)
+	}
+	if got := gotCols[colCreated].Width; got != oldCreatedWidth {
+		t.Fatalf("Created width = %d, want unchanged %d", got, oldCreatedWidth)
+	}
+}
+
+func TestMouseDragBetweenTwoAlreadyMinimalColumnsIsANoOp(t *testing.T) {
+	// Repo and Branch are both already at their own content-driven floor
+	// (no worktrees means both sit at repoColWidth/branchColWidth), so
+	// their shared border has nothing to give in either direction — and,
+	// crucially, doesn't silently resize Path instead the way a single
+	// global "flex" sink column once would have.
+	m := New(999, false)
+	m.width, m.height = 150, 40
+	m.resize()
 
 	cols := m.table.Columns()
 	_, originY := m.renderHeader()
 	borderX := repoBorderX(cols)
-	oldRepoWidth, oldPathWidth := cols[colRepo].Width, cols[colPath].Width
+	oldPathWidth := cols[colPath].Width
 
 	updated, _ := m.Update(tea.MouseMsg{X: borderX, Y: originY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 	m = updated.(Model)
-	updated, _ = m.Update(tea.MouseMsg{X: borderX + 5, Y: originY, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
+	updated, _ = m.Update(tea.MouseMsg{X: borderX + 4, Y: originY, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
 	m = updated.(Model)
 
 	gotCols := m.table.Columns()
-	if got, want := gotCols[colRepo].Width, oldRepoWidth+5; got != want {
-		t.Fatalf("Repo width = %d, want %d", got, want)
+	if got, want := gotCols[colRepo].Width, cols[colRepo].Width; got != want {
+		t.Fatalf("Repo width = %d, want unchanged %d (Branch has nothing to give)", got, want)
 	}
-	if got, want := gotCols[colPath].Width, oldPathWidth-5; got != want {
-		t.Fatalf("Path width = %d, want %d (flex column absorbs the drag)", got, want)
+	if got, want := gotCols[colPath].Width, oldPathWidth; got != want {
+		t.Fatalf("Path width = %d, want unchanged %d (it isn't this border's neighbor)", got, want)
+	}
+}
+
+func TestMouseDragRepoBranchBorderActuallyMoves(t *testing.T) {
+	// Regression test for the frozen-border bug: Repo/Branch's drag
+	// minimums were pinned at their content-grown widths, so neither had
+	// room to give and their shared border could never move. The minimums
+	// are the default floors now, so a drag on the border trades width
+	// between the two like any other border.
+	m := New(999, false)
+	m.width, m.height = 150, 40
+	m.resize()
+	long := wtEntry("/w/a", "issue/ISA-18408_dedupe-satellite-replay-echoes", 0)
+	m.applyWorktrees([]worktree.Entry{long})
+
+	cols := m.table.Columns()
+	if cols[colBranch].Width <= branchColWidth {
+		t.Fatalf("Branch width = %d, want it content-grown past %d for this test", cols[colBranch].Width, branchColWidth)
+	}
+	_, originY := m.renderHeader()
+	borderX := repoBorderX(cols)
+	oldRepoWidth, oldBranchWidth := cols[colRepo].Width, cols[colBranch].Width
+
+	// Drag the Repo/Branch border right: Repo widens, Branch narrows.
+	updated, _ := m.Update(tea.MouseMsg{X: borderX, Y: originY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.MouseMsg{X: borderX + 4, Y: originY, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
+	m = updated.(Model)
+
+	gotCols := m.table.Columns()
+	if got, want := gotCols[colRepo].Width, oldRepoWidth+4; got != want {
+		t.Fatalf("Repo width = %d, want %d (it absorbed the drag)", got, want)
+	}
+	if got, want := gotCols[colBranch].Width, oldBranchWidth-4; got != want {
+		t.Fatalf("Branch width = %d, want %d (the drag narrowed it)", got, want)
+	}
+}
+
+func TestMouseDragNarrowerThanContentSurvivesTheNextPoll(t *testing.T) {
+	// A drag that narrows a content-grown column below its content width
+	// is a deliberate pin: the next poll's column rebuild must keep it
+	// (truncating the label with an ellipsis) rather than snapping back
+	// to the content width.
+	m := New(999, false)
+	m.width, m.height = 150, 40
+	m.resize()
+	long := wtEntry("/w/a", "issue/ISA-18408_dedupe-satellite-replay-echoes", 0)
+	m.applyWorktrees([]worktree.Entry{long})
+
+	cols := m.table.Columns()
+	_, originY := m.renderHeader()
+	borderX := repoBorderX(cols)
+
+	// Drag right: Branch narrows below its content width, Repo widens.
+	updated, _ := m.Update(tea.MouseMsg{X: borderX, Y: originY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.MouseMsg{X: borderX + 4, Y: originY, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
+	m = updated.(Model)
+	resized := m.table.Columns()[colBranch].Width
+	if resized >= branchColumnWidth(m.displayedWorktrees()) {
+		t.Fatalf("Branch width = %d after the drag, want it narrowed below the content width %d", resized, branchColumnWidth(m.displayedWorktrees()))
+	}
+
+	m.applyWorktrees([]worktree.Entry{long})
+	if got := m.table.Columns()[colBranch].Width; got != resized {
+		t.Fatalf("Branch width = %d after a poll, want %d (the user's pin, undiscarded)", got, resized)
+	}
+}
+
+// worktreeBorderX returns the on-screen X of the Worktree column's own
+// right-hand border, i.e. the Worktree/Merge border.
+func worktreeBorderX(cols []table.Column) int {
+	off := loam.ColumnOffsets(cols)[colWorktree]
+	return off.Start + off.Width
+}
+
+func TestMouseDragWorktreeBorderMovesDownToItsContentFloor(t *testing.T) {
+	// Regression test for the frozen-Worktree bug: Created/Worktree/Merge
+	// used to floor their drag minimums at their own default widths, so
+	// all three sat exactly at their minimums and neither of Worktree's
+	// borders had any room to move in either direction. The minimums are
+	// the content floors now (values always fit; only the title may
+	// truncate), so the Worktree/Merge border trades width like any
+	// other.
+	m := New(999, false)
+	m.width, m.height = 150, 40
+	m.resize()
+
+	cols := m.table.Columns()
+	_, originY := m.renderHeader()
+	borderX := worktreeBorderX(cols)
+	oldWorktreeWidth, oldMergeWidth := cols[colWorktree].Width, cols[colMerge].Width
+
+	// Drag the Worktree/Merge border left, past the point where Worktree
+	// hits its content floor: Worktree narrows only that far, and Merge
+	// grows by exactly what Worktree actually gave up.
+	updated, _ := m.Update(tea.MouseMsg{X: borderX, Y: originY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.MouseMsg{X: borderX - 10, Y: originY, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
+	m = updated.(Model)
+
+	gotCols := m.table.Columns()
+	wantWorktree := worktreeContentWidth // clamped at the content floor
+	if got := gotCols[colWorktree].Width; got != wantWorktree {
+		t.Fatalf("Worktree width = %d, want %d (clamped at its content floor)", got, wantWorktree)
+	}
+	if got, want := gotCols[colMerge].Width, oldMergeWidth+(oldWorktreeWidth-wantWorktree); got != want {
+		t.Fatalf("Merge width = %d, want %d (it absorbed exactly what Worktree gave up)", got, want)
+	}
+
+	// And the pin survives the next poll's column rebuild.
+	m.applyWorktrees([]worktree.Entry{wtEntry("/w/a", "a", 0)})
+	if got := m.table.Columns()[colWorktree].Width; got != wantWorktree {
+		t.Fatalf("Worktree width = %d after a poll, want %d (the user's pin, undiscarded)", got, wantWorktree)
+	}
+}
+
+func TestMouseDragRecordsOnlyTheTwoDraggedColumns(t *testing.T) {
+	// colOverrides must only ever pin the two columns a drag actually
+	// moved: recording every column's width would freeze Repo/Branch's
+	// grow-to-fit sizing from the first drag on.
+	m := New(999, false)
+	m.width, m.height = 150, 40
+	m.resize()
+
+	cols := m.table.Columns()
+	_, originY := m.renderHeader()
+	borderX := mergeBorderX(cols)
+
+	updated, _ := m.Update(tea.MouseMsg{X: borderX, Y: originY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.MouseMsg{X: borderX + 4, Y: originY, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
+	m = updated.(Model)
+
+	if m.colOverrides == nil {
+		t.Fatal("want colOverrides recorded after a drag")
+	}
+	for i := range m.colOverrides {
+		if i != colMerge && i != colPath {
+			t.Fatalf("colOverrides pins column %d, want only the dragged pair (%d, %d)", i, colMerge, colPath)
+		}
+	}
+
+	// An unpinned Branch must still grow to fit a freshly polled longer
+	// branch name, drag or no drag.
+	long := wtEntry("/w/a", "issue/ISA-18408_dedupe-satellite-replay-echoes", 0)
+	m.applyWorktrees([]worktree.Entry{long})
+	if got, want := m.table.Columns()[colBranch].Width, branchColumnWidth(m.displayedWorktrees()); got != want {
+		t.Fatalf("Branch width = %d after a poll, want %d (still growing to fit, unpinned)", got, want)
 	}
 }
 
 func TestMouseDragSurvivesTheNextPoll(t *testing.T) {
 	m := New(999, false)
-	m.width = 200
-	m.table.SetWidth(200)
-	m.applyWorktrees([]worktree.Entry{wtEntry("/w/a", "a", time.Minute)})
+	m.width, m.height = 150, 40
+	m.resize()
 
 	cols := m.table.Columns()
 	_, originY := m.renderHeader()
-	borderX := repoBorderX(cols)
+	borderX := mergeBorderX(cols)
 
 	updated, _ := m.Update(tea.MouseMsg{X: borderX, Y: originY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 	m = updated.(Model)
-	updated, _ = m.Update(tea.MouseMsg{X: borderX + 5, Y: originY, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
+	updated, _ = m.Update(tea.MouseMsg{X: borderX + 4, Y: originY, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
 	m = updated.(Model)
-	resized := m.table.Columns()[colRepo].Width
+	resized := m.table.Columns()[colMerge].Width
 
-	// A fresh poll re-derives Repo's width from content (repoColumnWidth)
-	// on every call; the user's own drag must still win.
-	m.applyWorktrees([]worktree.Entry{wtEntry("/w/a", "a", time.Minute)})
-	if got := m.table.Columns()[colRepo].Width; got != resized {
-		t.Fatalf("Repo width = %d after a poll, want %d (the drag override, undiscarded)", got, resized)
+	// A fresh poll rebuilds columns from scratch (worktreeColumns);
+	// without colOverrides being carried through, Merge would silently
+	// revert to its own fixed default.
+	m.applyWorktrees([]worktree.Entry{wtEntry("/w/a", "a", 0)})
+	if got := m.table.Columns()[colMerge].Width; got != resized {
+		t.Fatalf("Merge width = %d after a poll, want %d (the drag override, undiscarded)", got, resized)
 	}
 }
 
-func TestWindowResizeClearsColumnOverrides(t *testing.T) {
+func TestWindowSizeMsgClearsColumnOverrides(t *testing.T) {
 	m := New(999, false)
-	m.width = 200
-	m.table.SetWidth(200)
-	m.applyWorktrees([]worktree.Entry{wtEntry("/w/a", "a", time.Minute)})
+	m.width, m.height = 150, 40
+	m.resize()
 
 	cols := m.table.Columns()
 	_, originY := m.renderHeader()
-	borderX := repoBorderX(cols)
+	borderX := mergeBorderX(cols)
 
 	updated, _ := m.Update(tea.MouseMsg{X: borderX, Y: originY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 	m = updated.(Model)
-	updated, _ = m.Update(tea.MouseMsg{X: borderX + 5, Y: originY, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
+	updated, _ = m.Update(tea.MouseMsg{X: borderX + 4, Y: originY, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
 	m = updated.(Model)
-	if m.colOverrides[colRepo] == 0 {
-		t.Fatal("want a Repo override recorded after the drag")
+	if m.colOverrides[colMerge] == 0 {
+		t.Fatal("want a Merge override recorded after the drag")
 	}
 
-	updated, _ = m.Update(tea.WindowSizeMsg{Width: 200, Height: 40})
+	updated, _ = m.Update(tea.WindowSizeMsg{Width: 150, Height: 40})
 	m = updated.(Model)
 	if m.colOverrides != nil {
 		t.Fatalf("colOverrides = %v after a terminal resize, want nil", m.colOverrides)
@@ -223,21 +451,43 @@ func TestWindowResizeClearsColumnOverrides(t *testing.T) {
 
 func TestMouseClickOffTheHeaderRowDoesNotStartADrag(t *testing.T) {
 	m := New(999, false)
-	m.width = 200
-	m.table.SetWidth(200)
-	m.applyWorktrees([]worktree.Entry{wtEntry("/w/a", "a", time.Minute)})
+	m.width, m.height = 150, 40
+	m.resize()
 
 	cols := m.table.Columns()
-	borderX := repoBorderX(cols)
-	oldRepoWidth := cols[colRepo].Width
+	borderX := mergeBorderX(cols)
+	oldMergeWidth := cols[colMerge].Width
 
 	// Well below the header row, e.g. a click on a data row.
 	updated, _ := m.Update(tea.MouseMsg{X: borderX, Y: 50, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 	m = updated.(Model)
-	updated, _ = m.Update(tea.MouseMsg{X: borderX + 5, Y: 50, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
+	updated, _ = m.Update(tea.MouseMsg{X: borderX + 4, Y: 50, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
 	m = updated.(Model)
 
-	if got := m.table.Columns()[colRepo].Width; got != oldRepoWidth {
-		t.Fatalf("Repo width = %d, want unchanged %d (click was off the header row)", got, oldRepoWidth)
+	if got := m.table.Columns()[colMerge].Width; got != oldMergeWidth {
+		t.Fatalf("Merge width = %d, want unchanged %d (click was off the header row)", got, oldMergeWidth)
+	}
+}
+
+func TestViewMarksColumnBordersOnTheHeaderRowSoThereIsSomethingToDrag(t *testing.T) {
+	m := New(999, false)
+	m.width, m.height = 150, 40
+	m.resize()
+	m.applyWorktrees([]worktree.Entry{wtEntry("/w/a", "a", 0)})
+
+	lines := strings.Split(m.View(), "\n")
+	var headerLine string
+	for _, line := range lines {
+		if strings.Contains(line, "Repo") {
+			headerLine = line
+			break
+		}
+	}
+	if headerLine == "" {
+		t.Fatalf("View() = %q, want a header line containing %q", m.View(), "Repo")
+	}
+	// 6 columns, so 5 internal borders.
+	if n := strings.Count(headerLine, loam.BorderGlyph); n != 5 {
+		t.Fatalf("header line has %d border glyphs, want 5 (one per internal column border): %q", n, headerLine)
 	}
 }

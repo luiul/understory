@@ -7,11 +7,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mattn/go-runewidth"
+
 	"github.com/luiul/understory/internal/worktree"
 )
 
 func wtEntry(path, branch string, commitAge time.Duration) worktree.Entry {
-	return worktree.Entry{Owner: "acme", Repo: "widgets", Branch: branch, Path: path, CommitTime: time.Now().Add(-commitAge)}
+	t := time.Now().Add(-commitAge)
+	return worktree.Entry{Owner: "acme", Repo: "widgets", Branch: branch, Path: path, CommitTime: t, CreatedTime: t}
 }
 
 func pathsOf(worktrees []worktree.Entry) []string {
@@ -36,7 +39,8 @@ func TestSortWorktreesOrdersMostRecentlyCommittedFirst(t *testing.T) {
 }
 
 func otherRepoEntry(path, branch string, commitAge time.Duration) worktree.Entry {
-	return worktree.Entry{Owner: "other", Repo: "gizmos", Branch: branch, Path: path, CommitTime: time.Now().Add(-commitAge)}
+	t := time.Now().Add(-commitAge)
+	return worktree.Entry{Owner: "other", Repo: "gizmos", Branch: branch, Path: path, CommitTime: t, CreatedTime: t}
 }
 
 func TestSortWorktreesGroupsEachRepoIntoOneContiguousBlock(t *testing.T) {
@@ -151,13 +155,36 @@ func TestBuildWorktreeRowsPlaceholderWhenEmpty(t *testing.T) {
 	}
 }
 
-func TestBuildWorktreeRowsTagsTheCursorRowsUpdatedCell(t *testing.T) {
-	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), wtEntry("/w/b", "b", 0)}, 1, "", time.Now())
-	if strings.Contains(rows[0][colUpdated], cursorSentinel) {
-		t.Fatalf("got cursorSentinel on non-cursor row 0's Updated cell %q, want it absent", rows[0][colUpdated])
+func TestBuildWorktreeRowsCreatedColumnUsesCreatedTimeNotCommitTime(t *testing.T) {
+	// A branch can go a long time between commits while the worktree
+	// itself is much younger (or vice versa): the Created column must
+	// track Entry.CreatedTime specifically, not fall back to reading
+	// CommitTime, or a stale-but-recently-created worktree (or a
+	// long-lived worktree with a very fresh commit) would show the wrong
+	// age entirely.
+	w := worktree.Entry{
+		Owner:       "acme",
+		Repo:        "widgets",
+		Branch:      "feature",
+		Path:        "/w/a",
+		CommitTime:  time.Now(),
+		CreatedTime: time.Now().Add(-3 * 24 * time.Hour),
 	}
-	if !strings.Contains(rows[1][colUpdated], cursorSentinel) {
-		t.Fatalf("got %q, want row 1's Updated cell to carry cursorSentinel (it's the cursor row)", rows[1][colUpdated])
+
+	rows := buildWorktreeRows([]worktree.Entry{w}, -1, "", time.Now())
+
+	if got := rows[0][colCreated]; got != "3d" {
+		t.Fatalf("got %q, want \"3d\" (from CreatedTime, not CommitTime's ~0s)", got)
+	}
+}
+
+func TestBuildWorktreeRowsTagsTheCursorRowsCreatedCell(t *testing.T) {
+	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), wtEntry("/w/b", "b", 0)}, 1, "", time.Now())
+	if strings.Contains(rows[0][colCreated], cursorSentinel) {
+		t.Fatalf("got cursorSentinel on non-cursor row 0's Created cell %q, want it absent", rows[0][colCreated])
+	}
+	if !strings.Contains(rows[1][colCreated], cursorSentinel) {
+		t.Fatalf("got %q, want row 1's Created cell to carry cursorSentinel (it's the cursor row)", rows[1][colCreated])
 	}
 }
 
@@ -391,11 +418,145 @@ func TestResolveWorktreeCursorFallsBackWhenPathIsGone(t *testing.T) {
 	}
 }
 
-func TestWorktreeColumnsPathNeverShrinksBelowTheFloor(t *testing.T) {
-	cols := worktreeColumns(50, nil, nil)
+func TestWorktreeColumnsPathKeepsItsFloorWheneverThereIsRoom(t *testing.T) {
+	// With no worktrees, every column sits at its default floor, so any
+	// terminal wide enough for the defaults plus minPathWidth must give
+	// Path at least minPathWidth.
+	need := repoColWidth + branchColWidth + createdColWidth + worktreeColWidth + mergeColWidth + 2*6
+	cols := worktreeColumns(need+minPathWidth, nil, nil)
 	last := cols[len(cols)-1]
 	if last.Width < minPathWidth {
 		t.Fatalf("got Path width %d, want at least %d", last.Width, minPathWidth)
+	}
+}
+
+func TestWorktreeColumnsNeverOverflowsTheTerminal(t *testing.T) {
+	// A wide Repo label and a wide Branch name together used to push the
+	// table past the terminal's right edge: Path floored at minPathWidth
+	// regardless, and the terminal clipped the overflow away. The layout
+	// must shed Repo/Branch's growth instead.
+	longRepo := wtEntry("/w/a", "main", 0)
+	longRepo.Owner = "hellofresh"
+	longRepo.Repo = "tardis-community"                                                 // Repo content width: 27
+	longBranch := wtEntry("/w/b", "issue/ISA-18408_dedupe-satellite-replay-echoes", 0) // Branch content width: 46
+	longBranch.Owner = "hellofresh"
+	longBranch.Repo = "tardis-community"
+	worktrees := []worktree.Entry{longRepo, longBranch}
+
+	const width = 120
+	cols := worktreeColumns(width, worktrees, nil)
+
+	total := 2 * len(cols)
+	for _, c := range cols {
+		total += c.Width
+	}
+	if total > width {
+		t.Fatalf("got total table width %d, want <= terminal width %d", total, width)
+	}
+	// Path keeps its full floor; the 10 missing columns come out of
+	// Branch's growth (the widest growable column), Repo stays untouched.
+	if got := cols[colPath].Width; got != minPathWidth {
+		t.Fatalf("got Path width %d, want %d", got, minPathWidth)
+	}
+	if got, want := cols[colRepo].Width, 27; got != want {
+		t.Fatalf("got Repo width %d, want %d (untouched, it isn't the widest)", got, want)
+	}
+	if got, want := cols[colBranch].Width, 35; got != want {
+		t.Fatalf("got Branch width %d, want %d (its growth shed to fit)", got, want)
+	}
+}
+
+func TestWorktreeColumnsWaterFillsRepoAndBranchWhenBothMustShrink(t *testing.T) {
+	// When one column's growth alone can't cover the shortfall, both
+	// growable columns shrink, equalizing from the top: truncation always
+	// hits the longest displayed value first, whichever column it's in.
+	longRepo := wtEntry("/w/a", "main", 0)
+	longRepo.Owner = "hellofresh"
+	longRepo.Repo = "tardis-community"                                                 // 27
+	longBranch := wtEntry("/w/b", "issue/ISA-18408_dedupe-satellite-replay-echoes", 0) // 46
+	longBranch.Owner = "hellofresh"
+	longBranch.Repo = "tardis-community"
+
+	const width = 100
+	cols := worktreeColumns(width, []worktree.Entry{longRepo, longBranch}, nil)
+
+	total := 2 * len(cols)
+	for _, c := range cols {
+		total += c.Width
+	}
+	if total > width {
+		t.Fatalf("got total table width %d, want <= terminal width %d", total, width)
+	}
+	if got := cols[colPath].Width; got != minPathWidth {
+		t.Fatalf("got Path width %d, want %d", got, minPathWidth)
+	}
+	// 31 columns short: Branch sheds 46→27, then the two alternate down
+	// to 21 each (ties break toward Repo first).
+	if got, want := cols[colRepo].Width, 21; got != want {
+		t.Fatalf("got Repo width %d, want %d", got, want)
+	}
+	if got, want := cols[colBranch].Width, 21; got != want {
+		t.Fatalf("got Branch width %d, want %d", got, want)
+	}
+}
+
+func TestWorktreeColumnsPathDipsBelowItsFloorOnlyOnceGrowthIsExhausted(t *testing.T) {
+	// Past the point where Repo/Branch have shed all their growth (both
+	// sit at their default floors), Path itself dips below minPathWidth
+	// rather than the table overflowing.
+	longRepo := wtEntry("/w/a", "main", 0)
+	longRepo.Owner = "hellofresh"
+	longRepo.Repo = "tardis-community"                                                 // 27
+	longBranch := wtEntry("/w/b", "issue/ISA-18408_dedupe-satellite-replay-echoes", 0) // 46
+	longBranch.Owner = "hellofresh"
+	longBranch.Repo = "tardis-community"
+
+	const width = 90
+	cols := worktreeColumns(width, []worktree.Entry{longRepo, longBranch}, nil)
+
+	if got, want := cols[colRepo].Width, repoColWidth; got != want {
+		t.Fatalf("got Repo width %d, want its default floor %d", got, want)
+	}
+	if got, want := cols[colBranch].Width, branchColWidth; got != want {
+		t.Fatalf("got Branch width %d, want its default floor %d", got, want)
+	}
+	if got, want := cols[colPath].Width, 16; got != want {
+		t.Fatalf("got Path width %d, want %d (below its floor, but the table fits)", got, want)
+	}
+}
+
+func TestWorktreeColumnsNeverCrushesAnythingBelowTheHardFloor(t *testing.T) {
+	// On an absurdly narrow terminal even the default floors don't fit:
+	// Repo/Branch shrink to hardMinColWidth and Path floors there too,
+	// accepting the remaining overflow rather than crushing columns to
+	// nothing.
+	cols := worktreeColumns(50, nil, nil)
+	if got := cols[colPath].Width; got != hardMinColWidth {
+		t.Fatalf("got Path width %d, want the hard floor %d", got, hardMinColWidth)
+	}
+	if got := cols[colRepo].Width; got != hardMinColWidth {
+		t.Fatalf("got Repo width %d, want the hard floor %d", got, hardMinColWidth)
+	}
+	if got := cols[colBranch].Width; got != hardMinColWidth {
+		t.Fatalf("got Branch width %d, want the hard floor %d", got, hardMinColWidth)
+	}
+}
+
+func TestWorktreeColumnsNeverAutoShrinksAnOverriddenColumn(t *testing.T) {
+	// A column the user widened by hand is pinned: when the layout runs
+	// out of room, Path absorbs the shortfall rather than the override
+	// being silently shrunk.
+	longBranch := wtEntry("/w/b", "issue/ISA-18408_dedupe-satellite-replay-echoes", 0) // 46
+	overrides := map[int]int{colBranch: 46}
+
+	const width = 90
+	cols := worktreeColumns(width, []worktree.Entry{longBranch}, overrides)
+
+	if got := cols[colBranch].Width; got != 46 {
+		t.Fatalf("got Branch width %d, want the pinned 46", got)
+	}
+	if got := cols[colPath].Width; got >= minPathWidth {
+		t.Fatalf("got Path width %d, want it below %d (it absorbed the shortfall)", got, minPathWidth)
 	}
 }
 
@@ -419,5 +580,64 @@ func TestWorktreeColumnsRepoNeverShrinksBelowItsFloor(t *testing.T) {
 
 	if got := cols[colRepo].Width; got != repoColWidth {
 		t.Fatalf("got Repo width %d, want the floor %d for a short label", got, repoColWidth)
+	}
+}
+
+func TestWorktreeColumnsTitlesNeverTouchTheirRightBorder(t *testing.T) {
+	// The header's column-border glyph (loam.DrawHeaderBorders) sits
+	// immediately right of each column's content area, so a column
+	// exactly as wide as its title renders "Title│" with the border
+	// touching the text. Every column must be at least title+1 wide.
+	for _, c := range worktreeColumns(200, nil, nil) {
+		if got, need := c.Width, runewidth.StringWidth(c.Title)+1; got < need {
+			t.Errorf("column %q width %d, want at least %d (title + 1 space before the border)", c.Title, got, need)
+		}
+	}
+}
+
+func TestWorktreeColumnsAppliesAnOverrideWiderThanTheNaturalFloor(t *testing.T) {
+	overrides := map[int]int{colRepo: repoColWidth + 10}
+
+	cols := worktreeColumns(200, nil, overrides)
+
+	if got, want := cols[colRepo].Width, repoColWidth+10; got != want {
+		t.Fatalf("got Repo width %d, want %d (the override, wider than the floor)", got, want)
+	}
+}
+
+func TestWorktreeColumnsAppliesAnOverrideNarrowerThanTheContent(t *testing.T) {
+	// An override applies absolutely, in both directions: a drag is a
+	// deliberate pin, so a column the user narrowed stays narrow even
+	// when a freshly polled longer label would have grown it — the label
+	// truncates with an ellipsis until the user drags wider again or
+	// resizes the terminal (which clears every override). Dropping the
+	// override instead would make every shrink drag snap back on the
+	// next poll, which is exactly the "resizing doesn't work" bug this
+	// test guards.
+	long := wtEntry("/w/a", "a", 0)
+	long.Owner = "hellofresh"
+	long.Repo = "isa-orchestration-and-something-long"
+
+	overrides := map[int]int{colRepo: repoColWidth + 2} // narrower than the label's own width
+
+	cols := worktreeColumns(200, []worktree.Entry{long}, overrides)
+
+	if got, want := cols[colRepo].Width, repoColWidth+2; got != want {
+		t.Fatalf("got Repo width %d, want %d (the user's pin, not the label's own width)", got, want)
+	}
+}
+
+func TestWorktreeColumnsNeverAppliesAnOverrideToPath(t *testing.T) {
+	// Path always absorbs whatever's left over, the same invariant a
+	// mouse drag itself already keeps (see trellis.Model.Handle's doc):
+	// an override recorded against it would make no sense and must be
+	// ignored entirely.
+	overrides := map[int]int{colPath: 9999}
+
+	cols := worktreeColumns(200, nil, overrides)
+
+	last := cols[len(cols)-1]
+	if last.Width == 9999 {
+		t.Fatalf("got Path width %d, want it computed from leftover space, not the override", last.Width)
 	}
 }
