@@ -252,6 +252,107 @@ func TestMouseDragBetweenTwoAlreadyMinimalColumnsIsANoOp(t *testing.T) {
 	}
 }
 
+func TestMouseDragRepoBranchBorderActuallyMoves(t *testing.T) {
+	// Regression test for the frozen-border bug: Repo/Branch's drag
+	// minimums were pinned at their content-grown widths, so neither had
+	// room to give and their shared border could never move. The minimums
+	// are the default floors now, so a drag on the border trades width
+	// between the two like any other border.
+	m := New(999, false)
+	m.width, m.height = 150, 40
+	m.resize()
+	long := wtEntry("/w/a", "issue/ISA-18408_dedupe-satellite-replay-echoes", 0)
+	m.applyWorktrees([]worktree.Entry{long})
+
+	cols := m.table.Columns()
+	if cols[colBranch].Width <= branchColWidth {
+		t.Fatalf("Branch width = %d, want it content-grown past %d for this test", cols[colBranch].Width, branchColWidth)
+	}
+	_, originY := m.renderHeader()
+	borderX := repoBorderX(cols)
+	oldRepoWidth, oldBranchWidth := cols[colRepo].Width, cols[colBranch].Width
+
+	// Drag the Repo/Branch border right: Repo widens, Branch narrows.
+	updated, _ := m.Update(tea.MouseMsg{X: borderX, Y: originY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.MouseMsg{X: borderX + 4, Y: originY, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
+	m = updated.(Model)
+
+	gotCols := m.table.Columns()
+	if got, want := gotCols[colRepo].Width, oldRepoWidth+4; got != want {
+		t.Fatalf("Repo width = %d, want %d (it absorbed the drag)", got, want)
+	}
+	if got, want := gotCols[colBranch].Width, oldBranchWidth-4; got != want {
+		t.Fatalf("Branch width = %d, want %d (the drag narrowed it)", got, want)
+	}
+}
+
+func TestMouseDragNarrowerThanContentSurvivesTheNextPoll(t *testing.T) {
+	// A drag that narrows a content-grown column below its content width
+	// is a deliberate pin: the next poll's column rebuild must keep it
+	// (truncating the label with an ellipsis) rather than snapping back
+	// to the content width.
+	m := New(999, false)
+	m.width, m.height = 150, 40
+	m.resize()
+	long := wtEntry("/w/a", "issue/ISA-18408_dedupe-satellite-replay-echoes", 0)
+	m.applyWorktrees([]worktree.Entry{long})
+
+	cols := m.table.Columns()
+	_, originY := m.renderHeader()
+	borderX := repoBorderX(cols)
+
+	// Drag right: Branch narrows below its content width, Repo widens.
+	updated, _ := m.Update(tea.MouseMsg{X: borderX, Y: originY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.MouseMsg{X: borderX + 4, Y: originY, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
+	m = updated.(Model)
+	resized := m.table.Columns()[colBranch].Width
+	if resized >= branchColumnWidth(m.displayedWorktrees()) {
+		t.Fatalf("Branch width = %d after the drag, want it narrowed below the content width %d", resized, branchColumnWidth(m.displayedWorktrees()))
+	}
+
+	m.applyWorktrees([]worktree.Entry{long})
+	if got := m.table.Columns()[colBranch].Width; got != resized {
+		t.Fatalf("Branch width = %d after a poll, want %d (the user's pin, undiscarded)", got, resized)
+	}
+}
+
+func TestMouseDragRecordsOnlyTheTwoDraggedColumns(t *testing.T) {
+	// colOverrides must only ever pin the two columns a drag actually
+	// moved: recording every column's width would freeze Repo/Branch's
+	// grow-to-fit sizing from the first drag on.
+	m := New(999, false)
+	m.width, m.height = 150, 40
+	m.resize()
+
+	cols := m.table.Columns()
+	_, originY := m.renderHeader()
+	borderX := mergeBorderX(cols)
+
+	updated, _ := m.Update(tea.MouseMsg{X: borderX, Y: originY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.MouseMsg{X: borderX + 4, Y: originY, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
+	m = updated.(Model)
+
+	if m.colOverrides == nil {
+		t.Fatal("want colOverrides recorded after a drag")
+	}
+	for i := range m.colOverrides {
+		if i != colMerge && i != colPath {
+			t.Fatalf("colOverrides pins column %d, want only the dragged pair (%d, %d)", i, colMerge, colPath)
+		}
+	}
+
+	// An unpinned Branch must still grow to fit a freshly polled longer
+	// branch name, drag or no drag.
+	long := wtEntry("/w/a", "issue/ISA-18408_dedupe-satellite-replay-echoes", 0)
+	m.applyWorktrees([]worktree.Entry{long})
+	if got, want := m.table.Columns()[colBranch].Width, branchColumnWidth(m.displayedWorktrees()); got != want {
+		t.Fatalf("Branch width = %d after a poll, want %d (still growing to fit, unpinned)", got, want)
+	}
+}
+
 func TestMouseDragSurvivesTheNextPoll(t *testing.T) {
 	m := New(999, false)
 	m.width, m.height = 150, 40

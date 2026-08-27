@@ -17,9 +17,14 @@ import (
 // branchColWidth are only floors (see repoColumnWidth/branchColumnWidth):
 // the Repo and Branch columns each grow to fit whichever displayed
 // label/branch name is longest, so a long owner/repo name or branch name
-// is never truncated the way a fixed width would. Created/Worktree/
-// Merge stay fixed; Path gets whatever's left after all of those,
-// floored at minPathWidth.
+// is never truncated the way a fixed width would — as long as the
+// terminal actually has room for everything (see worktreeColumns for
+// what gives when it doesn't). Created/Worktree/Merge stay fixed; Path
+// gets whatever's left after all of those, floored at minPathWidth.
+// hardMinColWidth is the last-resort floor for the growable columns and
+// Path on a genuinely cramped terminal: below it a column stops showing
+// anything recognizable at all, so the layout would rather overflow
+// (and let the terminal clip) than crush further.
 const (
 	repoColWidth     = 16
 	branchColWidth   = 20
@@ -27,6 +32,7 @@ const (
 	worktreeColWidth = 8
 	mergeColWidth    = 9
 	minPathWidth     = 20
+	hardMinColWidth  = 8
 )
 
 // Column indexes into both worktreeColumns' return value and each
@@ -81,22 +87,34 @@ func branchColumnWidth(worktrees []worktree.Entry) int {
 // Created/Worktree/Merge are fixed width, and Path fills whatever's
 // left.
 //
-// overrides carries forward whichever columns a mouse drag (see
+// overrides carries forward the widths a mouse drag (see
 // github.com/luiul/dashkit/trellis and Model.colOverrides' own doc) has
-// actually widened past their own natural floor — keyed by the Column
-// indexes above, same map Model.colOverrides holds. An override only
-// applies when it's still wider than that column's own freshly computed
-// floor: Repo/Branch's floor moves with the data (a longer owner/repo
-// label or branch name than the last poll raises it), so a stale
-// override recorded against a shorter one is dropped rather than
-// truncating the new, longer value; Created/Worktree/Merge's floor never
-// moves, so for them this is simply "only apply an override that grew
-// the column, never one that would shrink it below its own default".
+// pinned, keyed by the Column indexes above — same map Model.colOverrides
+// holds. An override applies absolutely, in both directions: a drag is a
+// deliberate choice, so a column the user narrowed stays narrow across
+// polls even when a freshly polled longer label/branch name would have
+// grown it (the name truncates with an ellipsis until the user drags it
+// wider again or resizes the terminal, which clears every override —
+// see Update). Columns without an override keep their natural sizing.
 // Path never takes an override at all: it always absorbs whatever's
 // left after every other column's own effective (possibly overridden)
 // width is accounted for, the same invariant a mouse drag itself already
 // keeps (see trellis.Model.Handle's doc) — the row's total width never
 // changes no matter which column a user actually resized.
+//
+// When the terminal is too narrow for all of the above at once, the
+// table must never overflow the terminal width (a wider-than-terminal
+// table just gets its right edge — Path — clipped away by the terminal,
+// which is exactly the bug this ordering exists to avoid). What gives,
+// in order: first Repo/Branch shed their growth, water-filled
+// largest-first down to their default floors (see reclaimWidth), so the
+// longest labels truncate before anything else does; then Path dips
+// below minPathWidth, down to hardMinColWidth; then Repo/Branch dip
+// below their own floors, down to hardMinColWidth too. Beyond that the
+// terminal is simply too narrow for six columns and the overflow is
+// accepted. Columns pinned by an override are never auto-shrunk: the
+// user's explicit division of space wins, and Path absorbs whatever
+// that leaves.
 func worktreeColumns(width int, worktrees []worktree.Entry, overrides map[int]int) []table.Column {
 	cols := []table.Column{
 		{Title: "Repo", Width: repoColumnWidth(worktrees)},
@@ -106,36 +124,86 @@ func worktreeColumns(width int, worktrees []worktree.Entry, overrides map[int]in
 		{Title: "Merge", Width: mergeColWidth},
 	}
 
-	fixedWidth := 0
+	used := 0
 	for i := range cols {
-		if w, ok := overrides[i]; ok && w > cols[i].Width {
+		if w, ok := overrides[i]; ok {
 			cols[i].Width = w
 		}
-		fixedWidth += cols[i].Width
+		used += cols[i].Width
 	}
-	totalCells := len(cols) + 1 // + Path
-	remaining := width - fixedWidth - 2*totalCells
-	if remaining < minPathWidth {
-		remaining = minPathWidth
+
+	// bubbles/table pads every cell with one space on each side (see
+	// loam.ColumnOffsets), so a row's rendered width is the sum of the
+	// column widths plus 2 per column, Path included.
+	avail := width - 2*(len(cols)+1)
+
+	// Stage 1: Repo/Branch give up their growth over their default floors.
+	used -= reclaimWidth(cols, overrides, map[int]int{colRepo: repoColWidth, colBranch: branchColWidth}, used+minPathWidth-avail)
+
+	// Path dipping below minPathWidth needs no code of its own: it's
+	// simply whatever's left. But below even the hard floor, Repo/Branch
+	// give up their default floors too, down to the same hard floor.
+	pathWidth := avail - used
+	if pathWidth < hardMinColWidth {
+		used -= reclaimWidth(cols, overrides, map[int]int{colRepo: hardMinColWidth, colBranch: hardMinColWidth}, hardMinColWidth-pathWidth)
+		pathWidth = avail - used
+		if pathWidth < hardMinColWidth {
+			pathWidth = hardMinColWidth // accept the overflow past this point
+		}
 	}
-	return append(cols, table.Column{Title: "Path", Width: remaining})
+	return append(cols, table.Column{Title: "Path", Width: pathWidth})
+}
+
+// reclaimWidth shrinks the growable columns (Repo/Branch), widest first,
+// until it has reclaimed need columns of terminal width or every
+// unpinned one has reached its floor, and returns the amount actually
+// reclaimed. Shrinking the currently-widest column one cell at a time
+// (rather than, say, always draining Branch first) equalizes the two
+// from the top, so truncation always hits whichever displayed value is
+// longest first regardless of which column it sits in. A column pinned
+// by an override is never touched: the user set that width by hand.
+func reclaimWidth(cols []table.Column, overrides map[int]int, floors map[int]int, need int) int {
+	reclaimed := 0
+	for reclaimed < need {
+		target := -1
+		for _, i := range []int{colRepo, colBranch} {
+			if _, pinned := overrides[i]; pinned {
+				continue
+			}
+			if cols[i].Width <= floors[i] {
+				continue
+			}
+			if target == -1 || cols[i].Width > cols[target].Width {
+				target = i
+			}
+		}
+		if target == -1 {
+			break
+		}
+		cols[target].Width--
+		reclaimed++
+	}
+	return reclaimed
 }
 
 // columnMinWidths returns each column's own minimum width, in the same
 // order/index worktreeColumns builds them, for trellis' mouse-resize
 // handling (see Update's tea.MouseMsg case). Repo and Branch floor at
-// their own currently displayed width (see repoColumnWidth/
-// branchColumnWidth): both already grow to fit whichever label/branch
-// name is currently longest, so there's no room to shrink either without
-// truncating it. Created/Worktree/Merge floor at their own fixed default
-// for the same reason — every value they ever show already fits exactly
-// there. Only Path, which absorbs whatever's left of the terminal width,
-// has real room to give up; its floor is minPathWidth, the same one
-// worktreeColumns' own leftover-space computation already respects.
-func columnMinWidths(worktrees []worktree.Entry) []int {
+// their default widths, NOT their current content-grown width: pinning
+// the floor at the content width would freeze every border at its
+// current position (both columns always exactly fit their content, so
+// neither ever has room to give), which is precisely what made column
+// resizing a no-op before. A drag that narrows a column below its
+// content truncates it with an ellipsis — that's the user's explicit
+// choice, and it sticks (see worktreeColumns' override handling).
+// Created/Worktree/Merge floor at their own fixed defaults, since every
+// value they ever show already fits exactly there. Path floors at
+// minPathWidth, the same one worktreeColumns' own leftover-space
+// computation respects whenever the terminal has the room.
+func columnMinWidths() []int {
 	return []int{
-		repoColumnWidth(worktrees),
-		branchColumnWidth(worktrees),
+		repoColWidth,
+		branchColWidth,
 		createdColWidth,
 		worktreeColWidth,
 		mergeColWidth,

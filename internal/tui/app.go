@@ -100,21 +100,22 @@ type Model struct {
 
 	// resizer tracks an in-progress mouse column-border drag (see
 	// github.com/luiul/dashkit/trellis); colOverrides remembers the
-	// resulting width of every column a drag has actually touched (a drag
-	// always moves two adjacent columns at once; see trellis.Model.
+	// resulting width of the two columns each drag has actually moved (a
+	// drag always moves two adjacent columns at once; see trellis.Model.
 	// Handle's own doc), by column index (see the Column indexes in
-	// worktrees.go). worktreeColumns applies whichever of these are still
-	// wider than that column's own natural floor (see its own doc — Repo/
-	// Branch's floor moves with the data, so a stale override narrower
-	// than a freshly polled, longer name is dropped rather than
-	// truncating it) every time columns are rebuilt, so a fresh poll
-	// doesn't silently discard an earlier resize. Cleared whenever a
-	// WindowSizeMsg arrives (see Update): a genuinely new terminal width
-	// invalidates the old distribution of space entirely, so resize
-	// starts fresh rather than fighting stale overrides sized for a
-	// different width. Path never carries an override at all — same as
-	// canopy's own Location, it always absorbs whatever's left over after
-	// every other column's own effective width is accounted for.
+	// worktrees.go). Only the dragged pair is ever recorded: recording
+	// every column's current width would pin columns the user never
+	// touched, freezing Repo/Branch's grow-to-fit sizing the moment any
+	// single drag happens. worktreeColumns applies these absolutely (see
+	// its own doc — a drag is a deliberate pin, in both directions) every
+	// time columns are rebuilt, so a fresh poll doesn't silently discard
+	// an earlier resize. Cleared whenever a WindowSizeMsg arrives (see
+	// Update): a genuinely new terminal width invalidates the old
+	// distribution of space entirely, so resize starts fresh rather than
+	// fighting stale overrides sized for a different width. Path never
+	// carries an override that worktreeColumns applies — same as canopy's
+	// own Location, it always absorbs whatever's left over after every
+	// other column's own effective width is accounted for.
 	colOverrides map[int]int
 	resizer      trellis.Model
 
@@ -197,18 +198,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseMsg:
 		_, originY := m.renderHeader()
 		cols := m.table.Columns()
-		widths, changed := m.resizer.Handle(msg, cols, columnMinWidths(m.displayedWorktrees()), 0, originY)
+		widths, changed := m.resizer.Handle(msg, cols, columnMinWidths(), 0, originY)
 		if changed {
 			if m.colOverrides == nil {
 				m.colOverrides = map[int]int{}
 			}
 			// A drag always moves the dragged column and its right-hand
 			// neighbor together (see trellis.Model.Handle's own doc), so
-			// both of their new widths need remembering, not only the one
-			// DragColumn() points at.
-			for i, w := range widths {
-				m.colOverrides[i] = w
-			}
+			// both of their new widths need remembering — and no others:
+			// recording every column's width would pin columns this drag
+			// never touched (see colOverrides' own doc).
+			dragged := m.resizer.DragColumn()
+			m.colOverrides[dragged] = widths[dragged]
+			m.colOverrides[dragged+1] = widths[dragged+1]
 			m.table.SetColumns(trellis.Apply(cols, widths))
 		}
 		return m, nil

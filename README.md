@@ -78,12 +78,15 @@ with rows grouped by repo, most of a block's rows look alike (blank Repo
 cell, similar Branch/Worktree/Merge text), so a highlighted row is much
 easier to keep track of while scrolling than a single character off to
 the side. Path shortens a leading home-directory prefix to `~`, same as
-your shell prompt. Repo grows to fit whichever owner/repo label is
-longest across the currently displayed worktrees, rather than a fixed
-width, so a long name is never truncated (unlike Branch, which is
-fixed-width and can still ellipsize). Worktree/Merge are plain-word
-renderings of `wt`'s own compact status glyphs (dirty/ahead/behind),
-rather than the glyphs themselves.
+your shell prompt. Repo and Branch each grow to fit whichever label or
+branch name is longest across the currently displayed worktrees, rather
+than a fixed width, so a long name is never truncated as long as the
+terminal has room for everything; on one that doesn't, Repo/Branch shed
+that growth first (longest-first, so truncation hits the longest values
+first) and only then does Path dip below its own preferred width — the
+table never overflows the terminal's right edge. Worktree/Merge are
+plain-word renderings of `wt`'s own compact status glyphs
+(dirty/ahead/behind), rather than the glyphs themselves.
 
 Each internal column border can be dragged with the mouse to widen or
 narrow it: the two columns it sits between trade width between
@@ -94,11 +97,13 @@ the same package canopy uses for its own table). A visible divider marks
 each border on the header row (see
 [`github.com/luiul/dashkit/loam`](https://github.com/luiul/dashkit/tree/main/loam)'s
 `DrawHeaderBorders`) so there's something to aim the drag at, rather than
-an invisible 2-space gap. A resize sticks across the next poll (Repo/
-Branch drop a stale override the moment a freshly polled label outgrows
-it — see worktreeColumns' own doc), but resets on a terminal resize,
-since that already recomputes Path's own width from scratch against the
-new terminal width anyway.
+an invisible 2-space gap. A resize sticks across polls: the dragged
+column's width is pinned exactly where you left it, even when a freshly
+polled longer label would have grown it (the label ellipsizes until you
+drag wider again) — only a terminal resize resets every column, since
+that already recomputes Path's own width from scratch against the new
+terminal width anyway. Columns you never dragged keep their automatic
+sizing.
 
 Enter opens (or, if a window is already open on that path, focuses) a VS
 Code window there via [`github.com/luiul/dashkit/mycelium`](https://github.com/luiul/dashkit/tree/main/mycelium)'s
