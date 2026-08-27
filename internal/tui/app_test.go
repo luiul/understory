@@ -38,6 +38,36 @@ func TestEnterCmdIsNilWhenNothingIsSelected(t *testing.T) {
 	}
 }
 
+func TestEnterCmdThreadsTheSelectedRowsPathAndBranchToMycelium(t *testing.T) {
+	// mycelium matches windows on rootName+branch together and can find a
+	// nested subpackage window by the branch in its title — but only if
+	// understory actually hands the branch over, not just the path.
+	orig := openVSCode
+	t.Cleanup(func() { openVSCode = orig })
+	var gotPath, gotBranch string
+	openVSCode = func(path, branch string) mycelium.Result {
+		gotPath, gotBranch = path, branch
+		return mycelium.Result{OK: true, Message: "Focused VS Code window for " + path + "."}
+	}
+
+	target := wtEntry("/w/tardis-community", "patch/ISA-18409", 0)
+	m := New(999, false)
+	m.applyWorktrees([]worktree.Entry{target})
+	m.table.SetCursor(0)
+
+	cmd := m.enterCmd()
+	if cmd == nil {
+		t.Fatal("want enterCmd to return a command for a valid selection")
+	}
+	msg := cmd()
+	if _, ok := msg.(openResultMsg); !ok {
+		t.Fatalf("got %T, want openResultMsg", msg)
+	}
+	if gotPath != "/w/tardis-community" || gotBranch != "patch/ISA-18409" {
+		t.Fatalf("got (%q, %q), want (%q, %q)", gotPath, gotBranch, "/w/tardis-community", "patch/ISA-18409")
+	}
+}
+
 func TestOpenResultMsgSetsNotificationAndSchedulesClear(t *testing.T) {
 	m := New(999, false)
 	updated, cmd := m.Update(openResultMsg{result: mycelium.Result{OK: true, Message: "Focused VS Code window."}})

@@ -170,9 +170,16 @@ func pollCmd() tea.Cmd {
 	}
 }
 
-func openCmd(path string) tea.Cmd {
+// openVSCode is a package-level seam onto mycelium.OpenVSCode, swapped
+// out in tests so app_test.go can verify the selected row's path and
+// branch are threaded through without shelling out to osascript or the
+// real `code` CLI; mycelium's own test suite covers the window-detection
+// logic itself in depth.
+var openVSCode = mycelium.OpenVSCode
+
+func openCmd(path, branch string) tea.Cmd {
 	return func() tea.Msg {
-		return openResultMsg{result: mycelium.OpenVSCode(path)}
+		return openResultMsg{result: openVSCode(path, branch)}
 	}
 }
 
@@ -253,13 +260,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// enterCmd opens or focuses a VS Code window on the selected row's path.
+// enterCmd opens or focuses a VS Code window on the selected row's path,
+// passing the row's branch along with it: mycelium matches windows on
+// rootName+branch together (every worktree of a repo shares the repo's
+// leaf folder name, so the basename alone can't tell two of them apart)
+// and can find a window open on a subpackage inside the worktree by the
+// branch in its title even when no file is focused there — see
+// mycelium.OpenVSCode's own doc.
 func (m Model) enterCmd() tea.Cmd {
 	w, ok := m.selectedWorktree()
 	if !ok {
 		return nil
 	}
-	return openCmd(w.Path)
+	return openCmd(w.Path, w.Branch)
 }
 
 func clampInt(v, lo, hi int) int {
