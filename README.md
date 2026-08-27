@@ -97,13 +97,17 @@ the same package canopy uses for its own table). A visible divider marks
 each border on the header row (see
 [`github.com/luiul/dashkit/loam`](https://github.com/luiul/dashkit/tree/main/loam)'s
 `DrawHeaderBorders`) so there's something to aim the drag at, rather than
-an invisible 2-space gap. A resize sticks across polls: the dragged
-column's width is pinned exactly where you left it, even when a freshly
-polled longer label would have grown it (the label ellipsizes until you
-drag wider again) — only a terminal resize resets every column, since
-that already recomputes Path's own width from scratch against the new
-terminal width anyway. Columns you never dragged keep their automatic
-sizing.
+an invisible 2-space gap. Every border can move in both directions:
+each column can shrink down to the width its values still fit (Repo/
+Branch their defaults, Created/Worktree/Merge their widest possible
+value — a narrower drag truncates only the header title, never a
+value), and Path down to its own floor. A resize sticks across polls:
+the dragged column's width is pinned exactly where you left it, even
+when a freshly polled longer label would have grown it (the label
+ellipsizes until you drag wider again) — only a terminal resize resets
+every column, since that already recomputes Path's own width from
+scratch against the new terminal width anyway. Columns you never
+dragged keep their automatic sizing.
 
 Enter opens (or, if a window is already open on that path, focuses) a VS
 Code window there via [`github.com/luiul/dashkit/mycelium`](https://github.com/luiul/dashkit/tree/main/mycelium)'s

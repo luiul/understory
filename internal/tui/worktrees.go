@@ -41,6 +41,23 @@ const (
 	hardMinColWidth  = 8
 )
 
+// createdContentWidth, worktreeContentWidth, and mergeContentWidth are
+// the widest values the Created/Worktree/Merge columns ever display:
+// humanizeSince tops out at "23h59m" (6) before switching to "%dd",
+// the working-tree states are all five letters, and "unmerged" is the
+// longest merge status. These are the columns' drag minimums (see
+// columnMinWidths): a user dragging one of them narrower than its
+// default truncates the header title ("Worktre…") but never a value —
+// the same "a drag is a deliberate choice" deal Repo/Branch get, which
+// is what makes their borders draggable at all (at the default width
+// both sides of the border would already sit at their minimums, leaving
+// zero room to trade in either direction).
+const (
+	createdContentWidth  = 6
+	worktreeContentWidth = 5
+	mergeContentWidth    = 8
+)
+
 // Column indexes into both worktreeColumns' return value and each
 // buildWorktreeRows row, in display order. colorizeRows (see colorize.go)
 // uses colWorktree/colMerge to recolor those two columns post-render.
@@ -199,20 +216,25 @@ func reclaimWidth(cols []table.Column, overrides map[int]int, floors map[int]int
 // the floor at the content width would freeze every border at its
 // current position (both columns always exactly fit their content, so
 // neither ever has room to give), which is precisely what made column
-// resizing a no-op before. A drag that narrows a column below its
-// content truncates it with an ellipsis — that's the user's explicit
-// choice, and it sticks (see worktreeColumns' override handling).
-// Created/Worktree/Merge floor at their own fixed defaults, since every
-// value they ever show already fits exactly there. Path floors at
-// minPathWidth, the same one worktreeColumns' own leftover-space
-// computation respects whenever the terminal has the room.
+// resizing a no-op before. Created/Worktree/Merge floor at their
+// CONTENT widths (see the createdContentWidth block), not their
+// title-sized defaults: their values are bounded and always fit, while
+// their defaults only add room for the title — so a drag can narrow
+// them past the default (truncating the title, never a value) to make
+// room for Path or a grown Repo/Branch, and every border on the table
+// can move in both directions as long as its two columns aren't both
+// already floored. Any drag that narrows a column is the user's
+// explicit choice, and it sticks (see worktreeColumns' override
+// handling). Path floors at minPathWidth, the same one worktreeColumns'
+// own leftover-space computation respects whenever the terminal has the
+// room.
 func columnMinWidths() []int {
 	return []int{
 		repoColWidth,
 		branchColWidth,
-		createdColWidth,
-		worktreeColWidth,
-		mergeColWidth,
+		createdContentWidth,
+		worktreeContentWidth,
+		mergeContentWidth,
 		minPathWidth,
 	}
 }

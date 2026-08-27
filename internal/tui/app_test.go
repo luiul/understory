@@ -318,6 +318,54 @@ func TestMouseDragNarrowerThanContentSurvivesTheNextPoll(t *testing.T) {
 	}
 }
 
+// worktreeBorderX returns the on-screen X of the Worktree column's own
+// right-hand border, i.e. the Worktree/Merge border.
+func worktreeBorderX(cols []table.Column) int {
+	off := loam.ColumnOffsets(cols)[colWorktree]
+	return off.Start + off.Width
+}
+
+func TestMouseDragWorktreeBorderMovesDownToItsContentFloor(t *testing.T) {
+	// Regression test for the frozen-Worktree bug: Created/Worktree/Merge
+	// used to floor their drag minimums at their own default widths, so
+	// all three sat exactly at their minimums and neither of Worktree's
+	// borders had any room to move in either direction. The minimums are
+	// the content floors now (values always fit; only the title may
+	// truncate), so the Worktree/Merge border trades width like any
+	// other.
+	m := New(999, false)
+	m.width, m.height = 150, 40
+	m.resize()
+
+	cols := m.table.Columns()
+	_, originY := m.renderHeader()
+	borderX := worktreeBorderX(cols)
+	oldWorktreeWidth, oldMergeWidth := cols[colWorktree].Width, cols[colMerge].Width
+
+	// Drag the Worktree/Merge border left, past the point where Worktree
+	// hits its content floor: Worktree narrows only that far, and Merge
+	// grows by exactly what Worktree actually gave up.
+	updated, _ := m.Update(tea.MouseMsg{X: borderX, Y: originY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.MouseMsg{X: borderX - 10, Y: originY, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
+	m = updated.(Model)
+
+	gotCols := m.table.Columns()
+	wantWorktree := worktreeContentWidth // clamped at the content floor
+	if got := gotCols[colWorktree].Width; got != wantWorktree {
+		t.Fatalf("Worktree width = %d, want %d (clamped at its content floor)", got, wantWorktree)
+	}
+	if got, want := gotCols[colMerge].Width, oldMergeWidth+(oldWorktreeWidth-wantWorktree); got != want {
+		t.Fatalf("Merge width = %d, want %d (it absorbed exactly what Worktree gave up)", got, want)
+	}
+
+	// And the pin survives the next poll's column rebuild.
+	m.applyWorktrees([]worktree.Entry{wtEntry("/w/a", "a", 0)})
+	if got := m.table.Columns()[colWorktree].Width; got != wantWorktree {
+		t.Fatalf("Worktree width = %d after a poll, want %d (the user's pin, undiscarded)", got, wantWorktree)
+	}
+}
+
 func TestMouseDragRecordsOnlyTheTwoDraggedColumns(t *testing.T) {
 	// colOverrides must only ever pin the two columns a drag actually
 	// moved: recording every column's width would freeze Repo/Branch's
