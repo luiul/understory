@@ -21,15 +21,21 @@ import (
 // terminal actually has room for everything (see worktreeColumns for
 // what gives when it doesn't). Created/Worktree/Merge stay fixed; Path
 // gets whatever's left after all of those, floored at minPathWidth.
-// hardMinColWidth is the last-resort floor for the growable columns and
-// Path on a genuinely cramped terminal: below it a column stops showing
-// anything recognizable at all, so the layout would rather overflow
-// (and let the terminal clip) than crush further.
+//
+// Every fixed width is at least its header title's width plus one: the
+// header's column-border glyph (loam.DrawHeaderBorders) sits immediately
+// right of each column's content area, so a column exactly as wide as
+// its title would render as "Title│" with the border touching the text
+// ("Worktree" in an 8-wide column did exactly that). hardMinColWidth is
+// the last-resort floor for the growable columns and Path on a
+// genuinely cramped terminal: below it a column stops showing anything
+// recognizable at all, so the layout would rather overflow (and let the
+// terminal clip) than crush further.
 const (
 	repoColWidth     = 16
 	branchColWidth   = 20
 	createdColWidth  = 8
-	worktreeColWidth = 8
+	worktreeColWidth = 9
 	mergeColWidth    = 9
 	minPathWidth     = 20
 	hardMinColWidth  = 8

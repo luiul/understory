@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mattn/go-runewidth"
+
 	"github.com/luiul/understory/internal/worktree"
 )
 
@@ -459,7 +461,7 @@ func TestWorktreeColumnsNeverOverflowsTheTerminal(t *testing.T) {
 	if got, want := cols[colRepo].Width, 27; got != want {
 		t.Fatalf("got Repo width %d, want %d (untouched, it isn't the widest)", got, want)
 	}
-	if got, want := cols[colBranch].Width, 36; got != want {
+	if got, want := cols[colBranch].Width, 35; got != want {
 		t.Fatalf("got Branch width %d, want %d (its growth shed to fit)", got, want)
 	}
 }
@@ -488,12 +490,12 @@ func TestWorktreeColumnsWaterFillsRepoAndBranchWhenBothMustShrink(t *testing.T) 
 	if got := cols[colPath].Width; got != minPathWidth {
 		t.Fatalf("got Path width %d, want %d", got, minPathWidth)
 	}
-	// 30 columns short: Branch sheds 46→27, then the two alternate down
-	// to 21/22 (ties break toward Repo first).
+	// 31 columns short: Branch sheds 46→27, then the two alternate down
+	// to 21 each (ties break toward Repo first).
 	if got, want := cols[colRepo].Width, 21; got != want {
 		t.Fatalf("got Repo width %d, want %d", got, want)
 	}
-	if got, want := cols[colBranch].Width, 22; got != want {
+	if got, want := cols[colBranch].Width, 21; got != want {
 		t.Fatalf("got Branch width %d, want %d", got, want)
 	}
 }
@@ -518,7 +520,7 @@ func TestWorktreeColumnsPathDipsBelowItsFloorOnlyOnceGrowthIsExhausted(t *testin
 	if got, want := cols[colBranch].Width, branchColWidth; got != want {
 		t.Fatalf("got Branch width %d, want its default floor %d", got, want)
 	}
-	if got, want := cols[colPath].Width, 17; got != want {
+	if got, want := cols[colPath].Width, 16; got != want {
 		t.Fatalf("got Path width %d, want %d (below its floor, but the table fits)", got, want)
 	}
 }
@@ -578,6 +580,18 @@ func TestWorktreeColumnsRepoNeverShrinksBelowItsFloor(t *testing.T) {
 
 	if got := cols[colRepo].Width; got != repoColWidth {
 		t.Fatalf("got Repo width %d, want the floor %d for a short label", got, repoColWidth)
+	}
+}
+
+func TestWorktreeColumnsTitlesNeverTouchTheirRightBorder(t *testing.T) {
+	// The header's column-border glyph (loam.DrawHeaderBorders) sits
+	// immediately right of each column's content area, so a column
+	// exactly as wide as its title renders "Title│" with the border
+	// touching the text. Every column must be at least title+1 wide.
+	for _, c := range worktreeColumns(200, nil, nil) {
+		if got, need := c.Width, runewidth.StringWidth(c.Title)+1; got < need {
+			t.Errorf("column %q width %d, want at least %d (title + 1 space before the border)", c.Title, got, need)
+		}
 	}
 }
 
