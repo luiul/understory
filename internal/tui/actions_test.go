@@ -96,7 +96,10 @@ func TestConfirmYesDispatchesRemovalAndClosesThePrompt(t *testing.T) {
 	}
 }
 
-func TestConfirmEnterAlsoConfirms(t *testing.T) {
+// TestConfirmEnterCancels honors the prompt's own [y/N] convention:
+// enter is the default answer, No, not a confirmation. (It once
+// confirmed, contradicting the very prompt text on screen.)
+func TestConfirmEnterCancels(t *testing.T) {
 	got, _ := stubRemove(t)
 	m := New(999, false)
 	m.applyWorktrees([]worktree.Entry{wtEntry("/w/a", "a", 0)})
@@ -105,12 +108,14 @@ func TestConfirmEnterAlsoConfirms(t *testing.T) {
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(Model)
-	if m.confirm != nil || cmd == nil {
-		t.Fatal("want enter to answer the prompt like y")
+	if m.confirm != nil {
+		t.Fatal("want the prompt closed after enter")
 	}
-	cmd()
-	if len(*got) != 1 {
-		t.Fatalf("got %d removals, want 1", len(*got))
+	if cmd != nil {
+		t.Fatal("want no removal command after enter")
+	}
+	if len(*got) != 0 {
+		t.Fatalf("got %d removals after enter, want none", len(*got))
 	}
 }
 
@@ -166,6 +171,24 @@ func TestConfirmationIsModalAndSwallowsOtherKeys(t *testing.T) {
 	}
 }
 
+// TestCtrlCQuitsEvenFromAnOpenPrompt pins the one exception to the
+// modal's key swallowing: ctrl+c always quits, from anywhere.
+func TestCtrlCQuitsEvenFromAnOpenPrompt(t *testing.T) {
+	m := New(999, false)
+	m.applyWorktrees([]worktree.Entry{wtEntry("/w/a", "a", 0)})
+	updated, _ := m.Update(key("x"))
+	m = updated.(Model)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m = updated.(Model)
+	if !m.quitting {
+		t.Fatal("want ctrl+c to quit even with a prompt open")
+	}
+	if cmd == nil {
+		t.Fatal("want tea.Quit returned")
+	}
+}
+
 func TestConfirmationAutoCancelsAfterTheTimeout(t *testing.T) {
 	m := New(999, false)
 	m.applyWorktrees([]worktree.Entry{wtEntry("/w/a", "a", 0)})
@@ -217,7 +240,7 @@ func TestPollShrinkingABatchKeepsOnlyTheRemainingEntries(t *testing.T) {
 	stale2.Stale = true
 	m := New(999, false)
 	m.applyWorktrees([]worktree.Entry{stale1, stale2})
-	updated, _ := m.Update(key("p"))
+	updated, _ := m.Update(key("P"))
 	m = updated.(Model)
 
 	m.applyWorktrees([]worktree.Entry{stale2}) // stale1 pruned externally
@@ -336,7 +359,7 @@ func TestPruneStaleTargetsEveryStaleEntry(t *testing.T) {
 	m := New(999, false)
 	m.applyWorktrees([]worktree.Entry{stale1, clean, stale2})
 
-	updated, _ := m.Update(key("p"))
+	updated, _ := m.Update(key("P"))
 	m = updated.(Model)
 	if m.confirm == nil || m.confirm.kind != confirmPruneStale {
 		t.Fatalf("got %+v, want a pending confirmPruneStale", m.confirm)
@@ -365,7 +388,7 @@ func TestPruneStaleWithNoneStaleJustNotifies(t *testing.T) {
 	m := New(999, false)
 	m.applyWorktrees([]worktree.Entry{wtEntry("/w/a", "a", 0)})
 
-	updated, cmd := m.Update(key("p"))
+	updated, cmd := m.Update(key("P"))
 	m = updated.(Model)
 	if m.confirm != nil {
 		t.Fatal("want no prompt when nothing is stale")
@@ -490,7 +513,7 @@ func TestCopyPathToClipboard(t *testing.T) {
 	m.home = "/w"
 	m.applyWorktrees([]worktree.Entry{wtEntry("/w/a", "a", 0)})
 
-	updated, cmd := m.Update(key("c"))
+	updated, cmd := m.Update(key("y"))
 	m = updated.(Model)
 	if cmd == nil {
 		t.Fatal("want a copy command for a valid selection")
@@ -521,7 +544,7 @@ func TestCopyFailureNotifiesAsAnError(t *testing.T) {
 
 	m := New(999, false)
 	m.applyWorktrees([]worktree.Entry{wtEntry("/w/a", "a", 0)})
-	updated, cmd := m.Update(key("c"))
+	updated, cmd := m.Update(key("y"))
 	m = updated.(Model)
 	updated, _ = m.Update(cmd().(copyResultMsg))
 	m = updated.(Model)

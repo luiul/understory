@@ -1,7 +1,7 @@
 // Package tui is understory's interactive dashboard: every worktree of
 // every repo it knows about (see internal/worktree), most recently
 // committed first, with open-or-focus-a-VS-Code-window on Enter and
-// confirmed removal (x/X/p/M, see actions.go) delegating the actual
+// confirmed removal (x/X/P/M, see actions.go) delegating the actual
 // work to `wt remove`/git, the same commands coppice's own `remove`
 // wraps.
 //
@@ -267,17 +267,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.helpOpen = false
 			return m, nil
 		}
-		// The confirmation prompt is modal: y/enter answers it, n/esc
-		// cancels, every other key is swallowed so the dashboard state
-		// the prompt describes can't shift under an in-flight answer.
+		// The confirmation prompt is modal: y confirms, n/esc/enter
+		// cancel (honoring the prompt's own [y/N]), every other key is
+		// swallowed so the dashboard state the prompt describes can't
+		// shift under an in-flight answer, and ctrl+c quits anyway (it
+		// always does, from anywhere).
 		if m.confirm != nil {
 			switch msg.String() {
-			case "y", "enter":
+			case "y":
 				c := m.confirm
 				m.confirm = nil
 				m.confirmToken++ // invalidate the pending auto-cancel tick
 				return m, confirmedCmd(c)
-			case "n", "esc":
+			case "n", "esc", "enter":
 				m.confirm = nil
 				m.confirmToken++
 				return m, nil
@@ -302,13 +304,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "X":
 			cmd := m.startConfirm(confirmForceOne)
 			return m, cmd
-		case "p":
+		case "P":
 			cmd := m.startConfirm(confirmPruneStale)
 			return m, cmd
 		case "M":
 			cmd := m.startConfirm(confirmRemoveMerged)
 			return m, cmd
-		case "c":
+		case "y":
+			// Copy is y, vim's yank: c collided with canopy's dismiss
+			// binding, and one key meaning two different things across
+			// the two dashboards is the worst kind of inconsistency.
 			if w, ok := m.selectedWorktree(); ok {
 				return m, copyCmd(w.Path)
 			}
@@ -456,20 +461,27 @@ func (m Model) renderHeader() (text string, tableOriginY int) {
 }
 
 // helpBindings is the ? overlay's content: every keybinding, including
-// the ones the one-line footer no longer has room for.
+// the inherited bubbles/table navigation set the one-line footer has no
+// room for. The navigation entries, the mouse row, the close hint, and
+// the title are deliberately identical to canopy's own overlay (the two
+// dashboards share one set of conventions); only the action rows in the
+// middle differ, being domain-specific.
 var helpBindings = []struct{ key, desc string }{
-	{"↑/↓, pgup/pgdn", "move the selection"},
+	{"↑/↓, k/j", "move the selection"},
+	{"pgup/pgdn, b/f", "page up/down"},
+	{"u/d", "half page up/down"},
+	{"g/G, home/end", "jump to the top/bottom"},
 	{"enter", "open or focus a VS Code window on the worktree"},
 	{"x", "remove the selected worktree (asks first; a merged branch is deleted, others kept)"},
 	{"X", "force remove: discard uncommitted changes, delete the branch even if unmerged"},
-	{"p", "prune every stale worktree registration (asks first)"},
+	{"P", "prune every stale worktree registration (asks first)"},
 	{"M", "remove every merged worktree of the selected repo (asks first)"},
-	{"c", "copy the worktree path to the clipboard"},
+	{"y", "copy the worktree path to the clipboard"},
 	{"m", "show or hide each repo's main worktree"},
 	{"r", "refresh now"},
 	{"mouse", "drag a column border on the header row to resize the two columns it joins"},
 	{"?", "this help"},
-	{"q", "quit"},
+	{"q, ctrl+c", "quit"},
 }
 
 // helpView renders the ? overlay that replaces the table while helpOpen.
@@ -510,7 +522,7 @@ func (m Model) footerView() string {
 		return style.Render(m.notification)
 	}
 	if m.helpOpen {
-		return subtleStyle.Render("any key closes")
+		return subtleStyle.Render("press any key to close")
 	}
 	return subtleStyle.Render("↑/↓ move · enter open/focus · x remove · ? help · q quit")
 }

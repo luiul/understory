@@ -1,7 +1,7 @@
-// The copy-path action (c): pipes the selected worktree's full path to
-// pbcopy. macOS-only, same as the rest of understory's desktop
-// integrations (mycelium's AppleScript window detection, dirBirthTime's
-// birth-time syscall).
+// The copy-path action (y, vim's yank): pipes the selected worktree's
+// full path to pbcopy. macOS-only, same as the rest of understory's
+// desktop integrations (mycelium's AppleScript window detection,
+// dirBirthTime's birth-time syscall).
 package tui
 
 import (

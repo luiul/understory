@@ -6,7 +6,7 @@
 // understory reads the same shared `~/.cache/wt/known-repos` registry
 // `wt` (worktrunk) and coppice already populate, and never writes to the
 // registry itself. The dashboard's one write operation is confirmed
-// worktree removal (x/X/p/M), delegated to `wt remove`/git, the same
+// worktree removal (x/X/P/M), delegated to `wt remove`/git, the same
 // commands coppice's own `remove` wraps. For everything else, see
 // https://worktrunk.dev and https://github.com/luiul/coppice.
 package main

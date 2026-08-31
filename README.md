@@ -132,7 +132,7 @@ being duplicated across both tools.
 ## Actions
 
 Everything other than removal is read-only. The removal keybindings all
-ask for confirmation first (`y`/`enter` confirms, `n`/`esc` cancels, and
+ask for confirmation first (`y` confirms, `n`/`esc`/`enter` cancels, and
 an unanswered prompt cancels itself after 10 seconds, since rows keep
 repolling and reordering underneath it), then delegate to `wt remove`
 (`git worktree remove --force` for stale registrations), the same
@@ -142,11 +142,20 @@ commands `cop remove` wraps:
 |---|---|
 | `x` | Remove the selected worktree. `wt` refuses one with uncommitted changes and deletes the branch only if merged; the prompt says which applies to the selected row. |
 | `X` | Force remove: discards uncommitted changes and deletes the branch even if unmerged. |
-| `p` | Prune every stale worktree registration (directories already gone; drops only the git metadata). |
+| `P` | Prune every stale worktree registration (directories already gone; drops only the git metadata). |
 | `M` | Remove every merged worktree of the selected row's repo, branches included. |
-| `c` | Copy the selected worktree's full path to the clipboard. |
+| `y` | Copy the selected worktree's full path to the clipboard (vim's yank). |
 | `m` | Show or hide each repo's main worktree (same as `--show-main`, at runtime). |
 | `?` | Full keybinding list. |
+
+### Conventions
+
+understory and canopy share one set of keybinding conventions, so muscle
+memory transfers between the two dashboards: lowercase keys act on the
+selected row or are reversible (`x`, `y`, `m`), uppercase keys are the
+bulk or stronger form (`X`, `P`, `M`), every destructive action asks for
+confirmation first, and `ctrl+c` always quits: from the table, from a
+confirmation prompt, from the help overlay.
 
 A removal's result (including `wt`'s own refusal reason, with a hint at
 `X` when it refused a dirty worktree) shows on the status line, and a

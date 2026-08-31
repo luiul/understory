@@ -1,5 +1,5 @@
 // Keybinding-driven actions on worktrees: the confirmation modal behind
-// x/X/p/M (with its auto-cancel timeout), the async removal command they
+// x/X/P/M (with its auto-cancel timeout), the async removal command they
 // dispatch, and the result summarization that turns per-entry outcomes
 // into a status-line notification. app.go owns the Model and the Update
 // switch; this file owns everything those keys set in motion.
@@ -38,7 +38,7 @@ const (
 	// remove.
 	confirmForceOne
 	// confirmPruneStale drops every displayed stale worktree
-	// registration (p): their directories are already gone, so this only
+	// registration (P): their directories are already gone, so this only
 	// prunes git metadata.
 	confirmPruneStale
 	// confirmRemoveMerged removes every displayed merged worktree of the
@@ -192,8 +192,10 @@ func (m Model) singleRemovePrompt(e worktree.Entry, force bool) string {
 	path := shortenHome(e.Path, m.home)
 	if e.Stale {
 		// Force flags are moot here: the directory is already gone, so x
-		// and X both just drop the registration.
-		return fmt.Sprintf("Drop the stale registration for %s? The directory is already gone; this only prunes the git metadata. [y/N]", path)
+		// and X both just drop the registration. The verb stays "Prune"
+		// either way, the same word the batch prompt (P) uses: one
+		// operation, one verb.
+		return fmt.Sprintf("Prune the stale registration for %s? The directory is already gone; this only prunes the git metadata. [y/N]", path)
 	}
 	if force {
 		return fmt.Sprintf("Force remove worktree %s at %s? Uncommitted changes will be discarded and branch %s deleted even if unmerged. [y/N]", e.Branch, path, e.Branch)
