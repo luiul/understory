@@ -155,7 +155,10 @@ memory transfers between the two dashboards: lowercase keys act on the
 selected row or are reversible (`x`, `y`, `m`), uppercase keys are the
 bulk or stronger form (`X`, `P`, `M`), every destructive action asks for
 confirmation first, and `ctrl+c` always quits: from the table, from a
-confirmation prompt, from the help overlay.
+confirmation prompt, from the help overlay. The full set of shared
+decisions (keybindings, the modal discipline, phrasing, rendering,
+testing, releasing) is written down once in
+[dashkit's CONVENTIONS.md](https://github.com/luiul/dashkit/blob/main/CONVENTIONS.md).
 
 A removal's result (including `wt`'s own refusal reason, with a hint at
 `X` when it refused a dirty worktree) shows on the status line, and a
