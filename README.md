@@ -201,8 +201,14 @@ dashboard.
   open-on-Enter via
   [`github.com/luiul/dashkit/mycelium`](https://github.com/luiul/dashkit/tree/main/mycelium)'s
   shared open-or-focus logic — the same package canopy uses to jump to
-  whichever window is running a given agent — notifications, and the
-  confirmed-removal modal behind x/X/p/M).
+  whichever window is running a given agent — notifications, the
+  confirmed-removal modal behind x/X/P/M, and the `?` help overlay, the
+  modal's state machine and the overlay's renderer shared with canopy
+  via
+  [`github.com/luiul/dashkit/confirm`](https://github.com/luiul/dashkit/tree/main/confirm)
+  and
+  [`github.com/luiul/dashkit/loam`](https://github.com/luiul/dashkit/tree/main/loam)'s
+  `HelpView`).
 - `cmd/understory`: the CLI entry point (flags, version).
 
 ## Install

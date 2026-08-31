@@ -25,8 +25,8 @@ import (
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/mattn/go-runewidth"
 
+	"github.com/luiul/dashkit/confirm"
 	"github.com/luiul/dashkit/loam"
 	"github.com/luiul/dashkit/mycelium"
 	"github.com/luiul/dashkit/trellis"
@@ -132,14 +132,13 @@ type Model struct {
 	notifyIsError bool
 	notifyToken   int
 
-	// confirm is the pending confirmation modal (nil when closed),
-	// confirmToken the token its auto-cancel tick must match (both
-	// incremented on every open/close so a stale tick never cancels a
-	// newer prompt; same token pattern as notifyToken/clearNotifyMsg).
-	// helpOpen swaps the table for the keybinding overlay (?).
-	confirm      *confirmState
-	confirmToken int
-	helpOpen     bool
+	// confirm is the pending confirmation modal's state machine (see
+	// github.com/luiul/dashkit/confirm): the armed prompt's payload (a
+	// confirmState, nil when closed) plus the auto-cancel token
+	// discipline. helpOpen swaps the table for the keybinding overlay
+	// (?).
+	confirm  confirm.State[confirmState]
+	helpOpen bool
 
 	width, height int
 	quitting      bool
@@ -234,7 +233,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// No column drags while a modal is up: the confirmation prompt
 		// owns the footer and the help overlay replaces the table, so a
 		// drag's target row isn't even on screen.
-		if m.helpOpen || m.confirm != nil {
+		if m.helpOpen || m.confirm.Active() {
 			return m, nil
 		}
 		_, originY := m.renderHeader()
@@ -267,23 +266,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.helpOpen = false
 			return m, nil
 		}
-		// The confirmation prompt is modal: y confirms, n/esc/enter
-		// cancel (honoring the prompt's own [y/N]), every other key is
-		// swallowed so the dashboard state the prompt describes can't
-		// shift under an in-flight answer, and ctrl+c quits anyway (it
-		// always does, from anywhere).
-		if m.confirm != nil {
-			switch msg.String() {
-			case "y":
-				c := m.confirm
-				m.confirm = nil
-				m.confirmToken++ // invalidate the pending auto-cancel tick
+		// The confirmation prompt is modal; the answer discipline
+		// itself (y confirms, n/esc/enter cancel, everything else
+		// swallowed, ctrl+c quits) lives in dashkit's confirm package,
+		// shared with canopy so the two can't drift apart.
+		if m.confirm.Active() {
+			switch confirm.Classify(msg) {
+			case confirm.Confirm:
+				c := m.confirm.Payload
+				m.confirm.Resolve()
 				return m, confirmedCmd(c)
-			case "n", "esc", "enter":
-				m.confirm = nil
-				m.confirmToken++
+			case confirm.Cancel:
+				m.confirm.Resolve()
 				return m, nil
-			case "ctrl+c":
+			case confirm.Quit:
 				m.quitting = true
 				return m, tea.Quit
 			default:
@@ -365,10 +361,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.notify("copied "+shortenHome(msg.path, m.home), false)
 
-	case cancelConfirmMsg:
-		if m.confirm != nil && msg.token == m.confirmToken {
-			m.confirm = nil
-			return m, m.notify("cancelled: no answer within "+confirmTimeout.String(), false)
+	case confirm.Msg:
+		if m.confirm.Tick(msg) {
+			return m, m.notify(confirm.TimeoutText(), false)
 		}
 		return m, nil
 
@@ -463,42 +458,33 @@ func (m Model) renderHeader() (text string, tableOriginY int) {
 // helpBindings is the ? overlay's content: every keybinding, including
 // the inherited bubbles/table navigation set the one-line footer has no
 // room for. The navigation entries, the mouse row, the close hint, and
-// the title are deliberately identical to canopy's own overlay (the two
-// dashboards share one set of conventions); only the action rows in the
-// middle differ, being domain-specific.
-var helpBindings = []struct{ key, desc string }{
-	{"↑/↓, k/j", "move the selection"},
-	{"pgup/pgdn, b/f", "page up/down"},
-	{"u/d", "half page up/down"},
-	{"g/G, home/end", "jump to the top/bottom"},
-	{"enter", "open or focus a VS Code window on the worktree"},
-	{"x", "remove the selected worktree (asks first; a merged branch is deleted, others kept)"},
-	{"X", "force remove: discard uncommitted changes, delete the branch even if unmerged"},
-	{"P", "prune every stale worktree registration (asks first)"},
-	{"M", "remove every merged worktree of the selected repo (asks first)"},
-	{"y", "copy the worktree path to the clipboard"},
-	{"m", "show or hide each repo's main worktree"},
-	{"r", "refresh now"},
-	{"mouse", "drag a column border on the header row to resize the two columns it joins"},
-	{"?", "this help"},
-	{"q, ctrl+c", "quit"},
+// the title are deliberately identical to canopy's own overlay, and the
+// rendering itself is loam.HelpView in both (the two dashboards share
+// one set of conventions); only the action rows in the middle differ,
+// being domain-specific.
+var helpBindings = []loam.HelpBinding{
+	{Key: "↑/↓, k/j", Desc: "move the selection"},
+	{Key: "pgup/pgdn, b/f", Desc: "page up/down"},
+	{Key: "u/d", Desc: "half page up/down"},
+	{Key: "g/G, home/end", Desc: "jump to the top/bottom"},
+	{Key: "enter", Desc: "open or focus a VS Code window on the worktree"},
+	{Key: "x", Desc: "remove the selected worktree (asks first; a merged branch is deleted, others kept)"},
+	{Key: "X", Desc: "force remove: discard uncommitted changes, delete the branch even if unmerged"},
+	{Key: "P", Desc: "prune every stale worktree registration (asks first)"},
+	{Key: "M", Desc: "remove every merged worktree of the selected repo (asks first)"},
+	{Key: "y", Desc: "copy the worktree path to the clipboard"},
+	{Key: "m", Desc: "show or hide each repo's main worktree"},
+	{Key: "r", Desc: "refresh now"},
+	{Key: "mouse", Desc: "drag a column border on the header row to resize the two columns it joins"},
+	{Key: "?", Desc: "this help"},
+	{Key: "q, ctrl+c", Desc: "quit"},
 }
 
-// helpView renders the ? overlay that replaces the table while helpOpen.
+// helpView renders the ? overlay that replaces the table while
+// helpOpen, delegating the actual layout to loam.HelpView (shared with
+// canopy).
 func (m Model) helpView() string {
-	width := 0
-	for _, b := range helpBindings {
-		if w := runewidth.StringWidth(b.key); w > width {
-			width = w
-		}
-	}
-	lines := make([]string, 0, len(helpBindings)+1)
-	lines = append(lines, titleStyle.Render("keybindings"))
-	for _, b := range helpBindings {
-		pad := strings.Repeat(" ", width-runewidth.StringWidth(b.key))
-		lines = append(lines, "  "+b.key+pad+"  "+subtleStyle.Render(b.desc))
-	}
-	return strings.Join(lines, "\n")
+	return loam.HelpView("keybindings", helpBindings, titleStyle, subtleStyle)
 }
 
 // footerView renders the bottom line: the confirmation prompt while one
@@ -507,9 +493,9 @@ func (m Model) helpView() string {
 // keybinding hints, kept to the essentials now that ? opens the full
 // list.
 func (m Model) footerView() string {
-	if m.confirm != nil {
+	if m.confirm.Active() {
 		style := promptStyle
-		if m.confirm.kind == confirmForceOne {
+		if m.confirm.Payload.kind == confirmForceOne {
 			style = errorStyle
 		}
 		return style.Render(m.confirmPrompt())

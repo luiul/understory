@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/luiul/dashkit/confirm"
 	"github.com/luiul/understory/internal/worktree"
 )
 
@@ -38,14 +39,14 @@ func TestXOpensTheConfirmationPromptForTheSelectedRow(t *testing.T) {
 	updated, cmd := m.Update(key("x"))
 	m = updated.(Model)
 
-	if m.confirm == nil {
+	if !m.confirm.Active() {
 		t.Fatal("want a pending confirmation after x")
 	}
-	if m.confirm.kind != confirmRemoveOne {
-		t.Fatalf("got kind %v, want confirmRemoveOne", m.confirm.kind)
+	if m.confirm.Payload.kind != confirmRemoveOne {
+		t.Fatalf("got kind %v, want confirmRemoveOne", m.confirm.Payload.kind)
 	}
-	if len(m.confirm.entries) != 1 || m.confirm.entries[0].Path != "/w/a" {
-		t.Fatalf("got targets %+v, want the selected row", m.confirm.entries)
+	if len(m.confirm.Payload.entries) != 1 || m.confirm.Payload.entries[0].Path != "/w/a" {
+		t.Fatalf("got targets %+v, want the selected row", m.confirm.Payload.entries)
 	}
 	if cmd == nil {
 		t.Fatal("want an auto-cancel tick scheduled with the prompt")
@@ -59,7 +60,7 @@ func TestXOnThePlaceholderRowDoesNothing(t *testing.T) {
 	m := New(999, false)
 	updated, cmd := m.Update(key("x"))
 	m = updated.(Model)
-	if m.confirm != nil || cmd != nil {
+	if m.confirm.Active() || cmd != nil {
 		t.Fatal("want no prompt and no command when nothing is selected")
 	}
 }
@@ -74,7 +75,7 @@ func TestConfirmYesDispatchesRemovalAndClosesThePrompt(t *testing.T) {
 
 	updated, cmd := m.Update(key("y"))
 	m = updated.(Model)
-	if m.confirm != nil {
+	if m.confirm.Active() {
 		t.Fatal("want the prompt closed after y")
 	}
 	if cmd == nil {
@@ -108,7 +109,7 @@ func TestConfirmEnterCancels(t *testing.T) {
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(Model)
-	if m.confirm != nil {
+	if m.confirm.Active() {
 		t.Fatal("want the prompt closed after enter")
 	}
 	if cmd != nil {
@@ -129,7 +130,7 @@ func TestConfirmNoAndEscCancelWithoutDispatching(t *testing.T) {
 
 		updated, cmd := m.Update(k)
 		m = updated.(Model)
-		if m.confirm != nil {
+		if m.confirm.Active() {
 			t.Fatalf("want the prompt closed after %v", k)
 		}
 		if cmd != nil {
@@ -155,7 +156,7 @@ func TestConfirmationIsModalAndSwallowsOtherKeys(t *testing.T) {
 	if m.table.Cursor() != 0 {
 		t.Fatal("want the cursor unmoved while the prompt is open")
 	}
-	if m.confirm == nil {
+	if !m.confirm.Active() {
 		t.Fatal("want the prompt still open")
 	}
 
@@ -166,7 +167,7 @@ func TestConfirmationIsModalAndSwallowsOtherKeys(t *testing.T) {
 	if m.quitting {
 		t.Fatal("want q swallowed by the modal, not quit")
 	}
-	if m.confirm == nil {
+	if !m.confirm.Active() {
 		t.Fatal("want the prompt still open after q")
 	}
 }
@@ -195,9 +196,9 @@ func TestConfirmationAutoCancelsAfterTheTimeout(t *testing.T) {
 	updated, _ := m.Update(key("x"))
 	m = updated.(Model)
 
-	updated, cmd := m.Update(cancelConfirmMsg{token: m.confirmToken})
+	updated, cmd := m.Update(confirm.Msg{Token: m.confirm.Token()})
 	m = updated.(Model)
-	if m.confirm != nil {
+	if m.confirm.Active() {
 		t.Fatal("want the prompt cancelled once its own token fires")
 	}
 	if m.notification == "" || m.notifyIsError {
@@ -214,9 +215,9 @@ func TestStaleCancelConfirmTokenIsIgnored(t *testing.T) {
 	updated, _ := m.Update(key("x"))
 	m = updated.(Model)
 
-	updated, _ = m.Update(cancelConfirmMsg{token: m.confirmToken - 1})
+	updated, _ = m.Update(confirm.Msg{Token: m.confirm.Token() - 1})
 	m = updated.(Model)
-	if m.confirm == nil {
+	if !m.confirm.Active() {
 		t.Fatal("want the prompt to survive a stale cancel token")
 	}
 }
@@ -228,7 +229,7 @@ func TestPollDroppingThePendingEntryCancelsThePrompt(t *testing.T) {
 	m = updated.(Model)
 
 	m.applyWorktrees(nil) // removed externally between polls
-	if m.confirm != nil {
+	if m.confirm.Active() {
 		t.Fatal("want the prompt cancelled once its target is gone")
 	}
 }
@@ -244,11 +245,11 @@ func TestPollShrinkingABatchKeepsOnlyTheRemainingEntries(t *testing.T) {
 	m = updated.(Model)
 
 	m.applyWorktrees([]worktree.Entry{stale2}) // stale1 pruned externally
-	if m.confirm == nil {
+	if !m.confirm.Active() {
 		t.Fatal("want the prompt to survive with remaining targets")
 	}
-	if len(m.confirm.entries) != 1 || m.confirm.entries[0].Path != "/w/gone2" {
-		t.Fatalf("got %+v, want only stale2 left", m.confirm.entries)
+	if len(m.confirm.Payload.entries) != 1 || m.confirm.Payload.entries[0].Path != "/w/gone2" {
+		t.Fatalf("got %+v, want only stale2 left", m.confirm.Payload.entries)
 	}
 	if !strings.Contains(m.confirmPrompt(), "Prune 1 stale") {
 		t.Fatalf("prompt = %q, want the count updated to 1", m.confirmPrompt())
@@ -263,7 +264,7 @@ func TestXOnTheMainWorktreeIsRefused(t *testing.T) {
 
 	updated, cmd := m.Update(key("x"))
 	m = updated.(Model)
-	if m.confirm != nil {
+	if m.confirm.Active() {
 		t.Fatal("want no prompt for the main worktree")
 	}
 	if !m.notifyIsError || !strings.Contains(m.notification, "main worktree") {
@@ -361,11 +362,11 @@ func TestPruneStaleTargetsEveryStaleEntry(t *testing.T) {
 
 	updated, _ := m.Update(key("P"))
 	m = updated.(Model)
-	if m.confirm == nil || m.confirm.kind != confirmPruneStale {
+	if !m.confirm.Active() || m.confirm.Payload.kind != confirmPruneStale {
 		t.Fatalf("got %+v, want a pending confirmPruneStale", m.confirm)
 	}
-	if len(m.confirm.entries) != 2 {
-		t.Fatalf("got %d targets, want the 2 stale entries", len(m.confirm.entries))
+	if len(m.confirm.Payload.entries) != 2 {
+		t.Fatalf("got %d targets, want the 2 stale entries", len(m.confirm.Payload.entries))
 	}
 	if !strings.Contains(m.confirmPrompt(), "Prune 2 stale") {
 		t.Fatalf("prompt = %q", m.confirmPrompt())
@@ -390,7 +391,7 @@ func TestPruneStaleWithNoneStaleJustNotifies(t *testing.T) {
 
 	updated, cmd := m.Update(key("P"))
 	m = updated.(Model)
-	if m.confirm != nil {
+	if m.confirm.Active() {
 		t.Fatal("want no prompt when nothing is stale")
 	}
 	if !strings.Contains(m.notification, "no stale worktrees") {
@@ -417,11 +418,11 @@ func TestRemoveMergedTargetsOnlyTheSelectedReposMergedEntries(t *testing.T) {
 
 	updated, _ := m.Update(key("M"))
 	m = updated.(Model)
-	if m.confirm == nil || m.confirm.kind != confirmRemoveMerged {
+	if !m.confirm.Active() || m.confirm.Payload.kind != confirmRemoveMerged {
 		t.Fatalf("got %+v, want a pending confirmRemoveMerged", m.confirm)
 	}
-	if len(m.confirm.entries) != 1 || m.confirm.entries[0].Branch != "merged-br" {
-		t.Fatalf("got targets %+v, want only acme/widgets' merged entry", m.confirm.entries)
+	if len(m.confirm.Payload.entries) != 1 || m.confirm.Payload.entries[0].Branch != "merged-br" {
+		t.Fatalf("got targets %+v, want only acme/widgets' merged entry", m.confirm.Payload.entries)
 	}
 	if !strings.Contains(m.confirmPrompt(), "acme/widgets") {
 		t.Fatalf("prompt = %q, want the repo named", m.confirmPrompt())
@@ -443,7 +444,7 @@ func TestRemoveMergedWithNoneMergedJustNotifies(t *testing.T) {
 
 	updated, _ := m.Update(key("M"))
 	m = updated.(Model)
-	if m.confirm != nil {
+	if m.confirm.Active() {
 		t.Fatal("want no prompt when the selected repo has nothing merged")
 	}
 	if !strings.Contains(m.notification, "no merged worktrees") {

@@ -1,27 +1,21 @@
 // Keybinding-driven actions on worktrees: the confirmation modal behind
-// x/X/P/M (with its auto-cancel timeout), the async removal command they
-// dispatch, and the result summarization that turns per-entry outcomes
-// into a status-line notification. app.go owns the Model and the Update
-// switch; this file owns everything those keys set in motion.
+// x/X/P/M (its state machine — answers, auto-cancel timeout, poll
+// revalidation — is dashkit's confirm package, shared with canopy), the
+// async removal command they dispatch, and the result summarization that
+// turns per-entry outcomes into a status-line notification. app.go owns
+// the Model and the Update switch; this file owns everything those keys
+// set in motion.
 package tui
 
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/luiul/dashkit/confirm"
 	"github.com/luiul/understory/internal/worktree"
 )
-
-// confirmTimeout is how long a confirmation prompt waits for an answer
-// before cancelling itself. An unattended modal would otherwise wedge
-// the dashboard forever (it swallows every other key), and a stale
-// prompt is dangerous anyway: rows keep repolling and reordering
-// underneath it, so a prompt answered long after it appeared may no
-// longer mean what it said when it appeared.
-const confirmTimeout = 10 * time.Second
 
 // confirmKind identifies which action a pending confirmation runs on a
 // "yes". Both the prompt text and the dispatched command switch on it.
@@ -46,8 +40,9 @@ const (
 	confirmRemoveMerged
 )
 
-// confirmState is a pending confirmation. entries holds the targets:
-// exactly one for the single-worktree kinds, the whole batch for
+// confirmState is a pending confirmation's payload (see
+// confirm.State). entries holds the targets: exactly one for the
+// single-worktree kinds, the whole batch for
 // confirmPruneStale/confirmRemoveMerged. Kept as plain data (not a
 // closure) so tests can inspect it and polls can revalidate it against
 // fresh worktree lists (see revalidateConfirm).
@@ -55,12 +50,6 @@ type confirmState struct {
 	kind    confirmKind
 	entries []worktree.Entry
 	repo    string // repo label, used by confirmRemoveMerged's prompt only
-}
-
-type cancelConfirmMsg struct{ token int }
-
-func confirmTimeoutCmd(token int) tea.Cmd {
-	return tea.Tick(confirmTimeout, func(time.Time) tea.Msg { return cancelConfirmMsg{token: token} })
 }
 
 // removeWorktree is a package-level seam onto worktree.Remove, swapped
@@ -98,7 +87,7 @@ func (m *Model) startConfirm(kind confirmKind) tea.Cmd {
 		if w.IsMain {
 			return m.notify("can't remove a repo's main worktree", true)
 		}
-		m.confirm = &confirmState{kind: kind, entries: []worktree.Entry{w}}
+		return m.confirm.Arm(confirmState{kind: kind, entries: []worktree.Entry{w}})
 	case confirmPruneStale:
 		var stale []worktree.Entry
 		for _, w := range m.displayedWorktrees() {
@@ -112,7 +101,7 @@ func (m *Model) startConfirm(kind confirmKind) tea.Cmd {
 		if len(stale) == 0 {
 			return m.notify("no stale worktrees to prune", false)
 		}
-		m.confirm = &confirmState{kind: kind, entries: stale}
+		return m.confirm.Arm(confirmState{kind: kind, entries: stale})
 	case confirmRemoveMerged:
 		w, ok := m.selectedWorktree()
 		if !ok {
@@ -128,10 +117,9 @@ func (m *Model) startConfirm(kind confirmKind) tea.Cmd {
 		if len(merged) == 0 {
 			return m.notify("no merged worktrees for "+label, false)
 		}
-		m.confirm = &confirmState{kind: kind, entries: merged, repo: label}
+		return m.confirm.Arm(confirmState{kind: kind, entries: merged, repo: label})
 	}
-	m.confirmToken++
-	return confirmTimeoutCmd(m.confirmToken)
+	return nil
 }
 
 // confirmedCmd builds the command a "yes" answers dispatch.
@@ -145,28 +133,25 @@ func confirmedCmd(c *confirmState) tea.Cmd {
 
 // revalidateConfirm keeps a pending confirmation honest across polls:
 // rows keep repolling while the prompt is open, so each target a fresh
-// poll no longer reports (removed externally) drops out of the batch,
-// and a prompt left with nothing to act on cancels itself.
+// poll no longer reports (removed externally) drops out of the batch
+// (confirm.Refresh), and a prompt left with nothing to act on cancels
+// itself.
 func (m *Model) revalidateConfirm(fresh []worktree.Entry) {
-	if m.confirm == nil {
+	if !m.confirm.Active() {
 		return
 	}
 	alive := make(map[string]bool, len(fresh))
 	for _, e := range fresh {
 		alive[e.Path] = true
 	}
-	remaining := make([]worktree.Entry, 0, len(m.confirm.entries))
-	for _, e := range m.confirm.entries {
-		if alive[e.Path] {
-			remaining = append(remaining, e)
-		}
-	}
+	remaining := confirm.Refresh(m.confirm.Payload.entries, func(e worktree.Entry) (worktree.Entry, bool) {
+		return e, alive[e.Path]
+	})
 	if len(remaining) == 0 {
-		m.confirm = nil
-		m.confirmToken++ // invalidate the pending auto-cancel tick
+		m.confirm.Resolve()
 		return
 	}
-	m.confirm.entries = remaining
+	m.confirm.Payload.entries = remaining
 }
 
 // confirmPrompt renders the pending confirmation's prompt text. It
@@ -174,7 +159,7 @@ func (m *Model) revalidateConfirm(fresh []worktree.Entry) {
 // displays (Dirty/Stale/MergeStatus), so the user confirms with full
 // knowledge of what removal will do to the branch.
 func (m Model) confirmPrompt() string {
-	c := m.confirm
+	c := m.confirm.Payload
 	switch c.kind {
 	case confirmRemoveOne, confirmForceOne:
 		return m.singleRemovePrompt(c.entries[0], c.kind == confirmForceOne)
