@@ -1,0 +1,276 @@
+// Keybinding-driven actions on worktrees: the confirmation modal behind
+// x/X/p/M (with its auto-cancel timeout), the async removal command they
+// dispatch, and the result summarization that turns per-entry outcomes
+// into a status-line notification. app.go owns the Model and the Update
+// switch; this file owns everything those keys set in motion.
+package tui
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/luiul/understory/internal/worktree"
+)
+
+// confirmTimeout is how long a confirmation prompt waits for an answer
+// before cancelling itself. An unattended modal would otherwise wedge
+// the dashboard forever (it swallows every other key), and a stale
+// prompt is dangerous anyway: rows keep repolling and reordering
+// underneath it, so a prompt answered long after it appeared may no
+// longer mean what it said when it appeared.
+const confirmTimeout = 10 * time.Second
+
+// confirmKind identifies which action a pending confirmation runs on a
+// "yes". Both the prompt text and the dispatched command switch on it.
+type confirmKind int
+
+const (
+	// confirmRemoveOne removes the selected worktree (x): plain
+	// `wt remove`, which refuses a dirty worktree and deletes the branch
+	// only if merged.
+	confirmRemoveOne confirmKind = iota
+	// confirmForceOne force-removes the selected worktree (X):
+	// `wt remove -f -D`, discarding uncommitted changes and deleting the
+	// branch even if unmerged. The "kill" counterpart to x's polite
+	// remove.
+	confirmForceOne
+	// confirmPruneStale drops every displayed stale worktree
+	// registration (p): their directories are already gone, so this only
+	// prunes git metadata.
+	confirmPruneStale
+	// confirmRemoveMerged removes every displayed merged worktree of the
+	// selected row's repo (M), deleting their (merged) branches too.
+	confirmRemoveMerged
+)
+
+// confirmState is a pending confirmation. entries holds the targets:
+// exactly one for the single-worktree kinds, the whole batch for
+// confirmPruneStale/confirmRemoveMerged. Kept as plain data (not a
+// closure) so tests can inspect it and polls can revalidate it against
+// fresh worktree lists (see revalidateConfirm).
+type confirmState struct {
+	kind    confirmKind
+	entries []worktree.Entry
+	repo    string // repo label, used by confirmRemoveMerged's prompt only
+}
+
+type cancelConfirmMsg struct{ token int }
+
+func confirmTimeoutCmd(token int) tea.Cmd {
+	return tea.Tick(confirmTimeout, func(time.Time) tea.Msg { return cancelConfirmMsg{token: token} })
+}
+
+// removeWorktree is a package-level seam onto worktree.Remove, swapped
+// out in tests so app/actions tests can verify dispatch without shelling
+// out to `wt`/`git`; same pattern as app.go's openVSCode seam.
+var removeWorktree = worktree.Remove
+
+type removeResultMsg struct{ results []worktree.RemoveResult }
+
+// removeCmd removes entries sequentially (each removal runs the repo's
+// pre-remove hooks, so a batch fired concurrently would fork a storm of
+// hook subprocesses) and reports every outcome in one message.
+func removeCmd(entries []worktree.Entry, opts worktree.RemoveOptions) tea.Cmd {
+	return func() tea.Msg {
+		results := make([]worktree.RemoveResult, len(entries))
+		for i, e := range entries {
+			results[i] = worktree.RemoveResult{Entry: e, Err: removeWorktree(e, opts)}
+		}
+		return removeResultMsg{results: results}
+	}
+}
+
+// startConfirm opens the confirmation modal for kind, computing its
+// target set from the current view, and returns the auto-cancel tick.
+// When there's nothing to confirm (no selection, a guarded entry, an
+// empty batch) no modal opens; the cases where the user needs telling
+// why set a notification instead and return its clear command.
+func (m *Model) startConfirm(kind confirmKind) tea.Cmd {
+	switch kind {
+	case confirmRemoveOne, confirmForceOne:
+		w, ok := m.selectedWorktree()
+		if !ok {
+			return nil
+		}
+		if w.IsMain {
+			return m.notify("can't remove a repo's main worktree", true)
+		}
+		m.confirm = &confirmState{kind: kind, entries: []worktree.Entry{w}}
+	case confirmPruneStale:
+		var stale []worktree.Entry
+		for _, w := range m.displayedWorktrees() {
+			// IsMain excluded: pruning the main checkout's registration
+			// from a dashboard is too surprising, even if its directory
+			// is gone; that's for the user to do in the repo itself.
+			if w.Stale && !w.IsMain {
+				stale = append(stale, w)
+			}
+		}
+		if len(stale) == 0 {
+			return m.notify("no stale worktrees to prune", false)
+		}
+		m.confirm = &confirmState{kind: kind, entries: stale}
+	case confirmRemoveMerged:
+		w, ok := m.selectedWorktree()
+		if !ok {
+			return nil
+		}
+		label := repoLabel(w)
+		var merged []worktree.Entry
+		for _, e := range m.displayedWorktrees() {
+			if repoLabel(e) == label && e.MergeStatus == worktree.MergeStatusMerged && !e.IsMain && !e.Stale {
+				merged = append(merged, e)
+			}
+		}
+		if len(merged) == 0 {
+			return m.notify("no merged worktrees for "+label, false)
+		}
+		m.confirm = &confirmState{kind: kind, entries: merged, repo: label}
+	}
+	m.confirmToken++
+	return confirmTimeoutCmd(m.confirmToken)
+}
+
+// confirmedCmd builds the command a "yes" answers dispatch.
+func confirmedCmd(c *confirmState) tea.Cmd {
+	opts := worktree.RemoveOptions{}
+	if c.kind == confirmForceOne {
+		opts = worktree.RemoveOptions{Force: true, ForceDelete: true}
+	}
+	return removeCmd(c.entries, opts)
+}
+
+// revalidateConfirm keeps a pending confirmation honest across polls:
+// rows keep repolling while the prompt is open, so each target a fresh
+// poll no longer reports (removed externally) drops out of the batch,
+// and a prompt left with nothing to act on cancels itself.
+func (m *Model) revalidateConfirm(fresh []worktree.Entry) {
+	if m.confirm == nil {
+		return
+	}
+	alive := make(map[string]bool, len(fresh))
+	for _, e := range fresh {
+		alive[e.Path] = true
+	}
+	remaining := make([]worktree.Entry, 0, len(m.confirm.entries))
+	for _, e := range m.confirm.entries {
+		if alive[e.Path] {
+			remaining = append(remaining, e)
+		}
+	}
+	if len(remaining) == 0 {
+		m.confirm = nil
+		m.confirmToken++ // invalidate the pending auto-cancel tick
+		return
+	}
+	m.confirm.entries = remaining
+}
+
+// confirmPrompt renders the pending confirmation's prompt text. It
+// states the consequences using the same signals the row already
+// displays (Dirty/Stale/MergeStatus), so the user confirms with full
+// knowledge of what removal will do to the branch.
+func (m Model) confirmPrompt() string {
+	c := m.confirm
+	switch c.kind {
+	case confirmRemoveOne, confirmForceOne:
+		return m.singleRemovePrompt(c.entries[0], c.kind == confirmForceOne)
+	case confirmPruneStale:
+		return fmt.Sprintf("Prune %d stale worktree %s? Their directories are already gone; this only drops the git registrations. [y/N]",
+			len(c.entries), plural(len(c.entries), "registration", "registrations"))
+	case confirmRemoveMerged:
+		return fmt.Sprintf("Remove %d merged %s of %s? Their branches will be deleted too. [y/N]",
+			len(c.entries), plural(len(c.entries), "worktree", "worktrees"), c.repo)
+	}
+	return ""
+}
+
+func (m Model) singleRemovePrompt(e worktree.Entry, force bool) string {
+	path := shortenHome(e.Path, m.home)
+	if e.Stale {
+		// Force flags are moot here: the directory is already gone, so x
+		// and X both just drop the registration.
+		return fmt.Sprintf("Drop the stale registration for %s? The directory is already gone; this only prunes the git metadata. [y/N]", path)
+	}
+	if force {
+		return fmt.Sprintf("Force remove worktree %s at %s? Uncommitted changes will be discarded and branch %s deleted even if unmerged. [y/N]", e.Branch, path, e.Branch)
+	}
+	prompt := fmt.Sprintf("Remove worktree %s at %s?", e.Branch, path)
+	switch e.MergeStatus {
+	case worktree.MergeStatusMerged:
+		prompt += " Branch is merged and will be deleted too."
+	case "":
+		// No merge relationship to report (shouldn't happen for a
+		// non-main, non-stale entry, but say nothing rather than lie).
+	default:
+		prompt += fmt.Sprintf(" Branch is %s and will be kept.", e.MergeStatus)
+	}
+	if e.Dirty {
+		prompt += " Warning: uncommitted changes, so wt will refuse (X force removes)."
+	}
+	return prompt + " [y/N]"
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
+// removeSummary builds the notification text for a finished removal
+// batch: a single entry gets a sentence of its own (with a force hint
+// when wt refused a dirty worktree), a batch a compact count.
+func removeSummary(results []worktree.RemoveResult) (text string, isErr bool) {
+	failed := 0
+	var firstErr error
+	for _, r := range results {
+		if r.Err != nil {
+			failed++
+			if firstErr == nil {
+				firstErr = r.Err
+			}
+		}
+	}
+	if len(results) == 1 {
+		if failed == 0 {
+			return "removed " + results[0].Entry.Branch, false
+		}
+		return failureText(firstErr), true
+	}
+	if failed == 0 {
+		return fmt.Sprintf("removed %d worktrees", len(results)), false
+	}
+	return fmt.Sprintf("removed %d of %d; %s", len(results)-failed, len(results), firstLine(firstErr.Error())), true
+}
+
+func failureText(err error) string {
+	msg := firstLine(err.Error())
+	if looksDirtyRefusal(msg) {
+		return msg + " (press X to force remove)"
+	}
+	return msg
+}
+
+// looksDirtyRefusal reports whether wt's refusal reads like the
+// uncommitted-changes one, so the notification can point at the X
+// keybinding instead of leaving the user to guess why removal failed.
+func looksDirtyRefusal(msg string) bool {
+	lower := strings.ToLower(msg)
+	for _, needle := range []string{"uncommitted", "untracked", "modified", "dirty"} {
+		if strings.Contains(lower, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
+}

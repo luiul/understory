@@ -320,21 +320,40 @@ func resolveWorktreeCursor(displayed []worktree.Entry, path string, fallback int
 }
 
 // applyWorktrees stores a fresh worktree poll, keeps whichever worktree
-// (by path) was previously selected selected, and rebuilds the table's
-// columns and rows. Columns are rebuilt here too, not just in resize:
-// repoColumnWidth/branchColumnWidth depend on the worktree set itself,
-// so a freshly polled repo with a longer owner/repo label or branch
-// name needs the Repo/Branch column widened immediately, not just on
-// the next terminal resize.
+// (by path) was previously selected selected, drops any confirmation
+// targets the poll no longer reports (see revalidateConfirm), and
+// rebuilds the table's columns and rows (see redisplay).
 func (m *Model) applyWorktrees(fresh []worktree.Entry) {
-	oldCursor := clampCursor(m.table.Cursor(), len(m.displayedWorktrees()))
-	oldDisplayed := m.displayedWorktrees() // still against the OLD m.worktrees
-	var previousPath string
-	if oldCursor >= 0 && oldCursor < len(oldDisplayed) {
-		previousPath = oldDisplayed[oldCursor].Path
-	}
-
+	previousPath := m.selectedPath() // against the OLD set, before the swap
 	m.worktrees = fresh
+	m.revalidateConfirm(fresh)
+	m.redisplay(previousPath)
+}
+
+// selectedPath returns the path of the currently selected row, or "" if
+// there are none showing.
+func (m Model) selectedPath() string {
+	displayed := m.displayedWorktrees()
+	idx := clampCursor(m.table.Cursor(), len(displayed))
+	if idx < 0 || idx >= len(displayed) {
+		return ""
+	}
+	return displayed[idx].Path
+}
+
+// redisplay rebuilds the table's columns and rows from the current
+// worktree set, keeping whichever worktree (by path) was previously
+// selected selected. Columns are rebuilt on every redisplay, not just in
+// resize: repoColumnWidth/branchColumnWidth depend on the worktree set
+// itself, so a freshly polled repo with a longer owner/repo label or
+// branch name needs the Repo/Branch column widened immediately, not just
+// on the next terminal resize. Also called directly when the displayed
+// set changes without a poll (the m key toggling showMain). previousPath
+// is the selection to preserve, captured by the caller BEFORE whatever
+// change prompted the redisplay (applyWorktrees must read it from the
+// old worktree set, before swapping m.worktrees).
+func (m *Model) redisplay(previousPath string) {
+	oldCursor := clampCursor(m.table.Cursor(), len(m.displayedWorktrees()))
 
 	newDisplayed := m.displayedWorktrees()
 	m.cursor = resolveWorktreeCursor(newDisplayed, previousPath, oldCursor)

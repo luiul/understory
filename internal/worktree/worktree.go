@@ -5,9 +5,11 @@
 // already resolves branch/commit/dirty/ahead-behind state correctly
 // (differently for a main worktree vs. its remote, and a branch worktree
 // vs. its main branch), so this package only shells out to `wt list
-// --format json` and parses its output. It never writes anything, not to
-// `wt`'s own state, and not to the shared repo registry it reads from
-// (see KnownRepoPaths).
+// --format json` and parses its output. The one write operation is
+// Remove, which delegates to `wt remove` (or git directly for a stale
+// registration), the same commands coppice's own `remove` wraps. The
+// shared repo registry it reads (see KnownRepoPaths) stays strictly
+// read-only here.
 //
 // Every exported function here degrades gracefully to "no worktree rows"
 // when `wt` isn't on PATH or a given repo isn't `wt`-managed: a missing
@@ -29,6 +31,12 @@ import (
 // subprocesses per worktree it reports on, and a repo with many
 // worktrees can legitimately take a few seconds.
 const defaultTimeout = 10 * time.Second
+
+// removeTimeout bounds one removal. `wt remove --foreground` runs the
+// repo's pre-remove hooks synchronously before returning, so this is far
+// more generous than defaultTimeout: hooks can legitimately take tens of
+// seconds.
+const removeTimeout = 2 * time.Minute
 
 // maxConcurrentListCalls caps how many `wt list` subprocesses ListAll runs
 // at once, mirroring coppice's own ThreadPoolExecutor cap on the same
@@ -115,6 +123,12 @@ type Entry struct {
 	// and a branch worktree (vs. its main branch), and wt already resolved
 	// that correctly.
 	Symbols string
+	// RepoPath is the filesystem root of the repo this entry was listed
+	// from (the path ListWorktrees queried with `wt -C`). Removal needs
+	// it: neither Branch nor Path alone identifies the owning repo to
+	// shell out to. Not parsed from wt's output; filled in by
+	// ListWorktrees itself.
+	RepoPath string
 }
 
 // MergeStatus values for Entry.MergeStatus. The zero value ("") means
@@ -241,6 +255,9 @@ func ListWorktrees(repoPath string) ([]Entry, error) {
 	entries, err := parseListOutput(out)
 	if err != nil {
 		return nil, err
+	}
+	for i := range entries {
+		entries[i].RepoPath = repoPath
 	}
 	applyRepoFallback(entries, repoPath)
 	applyCreatedTime(entries)
@@ -395,6 +412,101 @@ func dedupe(paths []string) []string {
 		}
 	}
 	return out
+}
+
+// RemoveOptions tunes Remove's handling of a normal (non-stale) entry.
+// Both are moot for a Stale one: its directory is already gone, so there
+// is nothing to force.
+type RemoveOptions struct {
+	// Force passes wt's -f: remove even with uncommitted changes
+	// (staged, modified, or untracked files are discarded).
+	Force bool
+	// ForceDelete passes wt's -D: delete the branch even if unmerged.
+	// Without it wt only deletes merged branches, keeping the rest.
+	ForceDelete bool
+}
+
+// RemoveResult is one entry's outcome in a (possibly single-entry)
+// removal batch, so the TUI can summarize partial failures.
+type RemoveResult struct {
+	Entry Entry
+	Err   error
+}
+
+// RemoveError is a failed Remove: the underlying command's exit error
+// plus its trimmed combined output. The output is what Error() leads
+// with, since wt's/git's own message (e.g. why a dirty worktree was
+// refused) is far more actionable than "exit status 1".
+type RemoveError struct {
+	Branch string
+	Output string
+	Err    error
+}
+
+func (e *RemoveError) Error() string {
+	if e.Output != "" {
+		return e.Output
+	}
+	return e.Err.Error()
+}
+
+func (e *RemoveError) Unwrap() error { return e.Err }
+
+// Remove removes entry's worktree, mirroring `cop remove`'s semantics:
+// a normal entry goes through `wt remove` (which runs the repo's
+// pre-remove hooks and deletes the branch if merged), a Stale one
+// through git directly (see pruneStaleArgs). The caller is expected to
+// have confirmed with the user already: Remove passes wt's -y and never
+// prompts itself.
+func Remove(entry Entry, opts RemoveOptions) error {
+	if entry.Stale {
+		return runRemoval(entry.Branch, "git", pruneStaleArgs(entry))
+	}
+	bin, ok := binaryPath()
+	if !ok {
+		return errNotInstalled
+	}
+	return runRemoval(entry.Branch, bin, removeArgs(entry, opts))
+}
+
+func runRemoval(branch, bin string, args []string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), removeTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, bin, args...).CombinedOutput()
+	if err != nil {
+		return &RemoveError{Branch: branch, Output: strings.TrimSpace(string(out)), Err: err}
+	}
+	return nil
+}
+
+// removeArgs builds the `wt` invocation that removes entry's worktree.
+// `-y` because the caller (understory's TUI) shows its own confirmation
+// prompt and wt's own is unreachable with captured output anyway: wt
+// treats the call as non-interactive and skips it entirely, the same
+// finding coppice documented for its own remove. `--foreground` so the
+// call only returns once removal (and its pre-remove hooks) actually
+// finished, making both the reported result and the list refresh that
+// follows it accurate.
+func removeArgs(entry Entry, opts RemoveOptions) []string {
+	args := []string{"-C", entry.RepoPath, "remove", entry.Branch, "-y", "--foreground"}
+	if opts.Force {
+		args = append(args, "-f")
+	}
+	if opts.ForceDelete {
+		args = append(args, "-D")
+	}
+	return args
+}
+
+// pruneStaleArgs builds the git invocation that drops a stale (prunable)
+// worktree's registration. `wt remove` refuses these ("Worktree
+// directory missing ... run git worktree prune"), and a detached stale
+// entry has no branch name to hand it in the first place; git's own
+// `worktree remove --force` tolerates the missing directory and drops
+// exactly this one registration, unlike a repo-wide `git worktree
+// prune`. Mirrors coppice's prune_stale.
+func pruneStaleArgs(entry Entry) []string {
+	return []string{"-C", entry.RepoPath, "worktree", "remove", "--force", entry.Path}
 }
 
 type notInstalledError struct{}

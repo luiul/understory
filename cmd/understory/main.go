@@ -4,10 +4,11 @@
 // whichever one is selected.
 //
 // understory reads the same shared `~/.cache/wt/known-repos` registry
-// `wt` (worktrunk) and coppice already populate, read only: it never
-// writes to it, and never creates, switches, or removes a worktree
-// itself. For that, see https://worktrunk.dev and
-// https://github.com/luiul/coppice.
+// `wt` (worktrunk) and coppice already populate, and never writes to the
+// registry itself. The dashboard's one write operation is confirmed
+// worktree removal (x/X/p/M), delegated to `wt remove`/git, the same
+// commands coppice's own `remove` wraps. For everything else, see
+// https://worktrunk.dev and https://github.com/luiul/coppice.
 package main
 
 import (
@@ -31,7 +32,8 @@ const helpText = `understory: interactive dashboard for every git worktree of ev
 wt/coppice know about, most recently committed first.
 
 Arrow keys to move, Enter to open or focus a VS Code window on the
-selected worktree, q to quit, r to refresh.
+selected worktree, x to remove it (with confirmation), ? for every
+keybinding, r to refresh, q to quit.
 
 Usage:
   understory [flags]

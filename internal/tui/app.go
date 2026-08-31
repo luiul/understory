@@ -1,6 +1,9 @@
 // Package tui is understory's interactive dashboard: every worktree of
 // every repo it knows about (see internal/worktree), most recently
-// committed first, with open-or-focus-a-VS-Code-window on Enter.
+// committed first, with open-or-focus-a-VS-Code-window on Enter and
+// confirmed removal (x/X/p/M, see actions.go) delegating the actual
+// work to `wt remove`/git, the same commands coppice's own `remove`
+// wraps.
 //
 // This is deliberately a single view with no notion of "live" (an agent
 // currently working inside a given worktree): that would require the
@@ -22,6 +25,7 @@ import (
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 
 	"github.com/luiul/dashkit/loam"
 	"github.com/luiul/dashkit/mycelium"
@@ -50,6 +54,11 @@ var (
 	subtleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	errorStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("9"))
 	okStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	// promptStyle renders a pending confirmation's prompt: yellow for the
+	// ordinary kinds, while errorStyle's louder red marks confirmForceOne
+	// (the one that discards uncommitted work and deletes unmerged
+	// branches). See footerView.
+	promptStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("11"))
 )
 
 // homeDir is the current user's home directory, used to shorten the Path
@@ -123,6 +132,15 @@ type Model struct {
 	notifyIsError bool
 	notifyToken   int
 
+	// confirm is the pending confirmation modal (nil when closed),
+	// confirmToken the token its auto-cancel tick must match (both
+	// incremented on every open/close so a stale tick never cancels a
+	// newer prompt; same token pattern as notifyToken/clearNotifyMsg).
+	// helpOpen swaps the table for the keybinding overlay (?).
+	confirm      *confirmState
+	confirmToken int
+	helpOpen     bool
+
 	width, height int
 	quitting      bool
 }
@@ -187,6 +205,16 @@ func clearNotifyCmd(token int) tea.Cmd {
 	return tea.Tick(notifyDuration, func(time.Time) tea.Msg { return clearNotifyMsg{token: token} })
 }
 
+// notify sets the status-line notification and returns the command that
+// clears it after notifyDuration, invalidated if a newer notification
+// replaces it first (the token pattern, see clearNotifyMsg).
+func (m *Model) notify(text string, isErr bool) tea.Cmd {
+	m.notification = text
+	m.notifyIsError = isErr
+	m.notifyToken++
+	return clearNotifyCmd(m.notifyToken)
+}
+
 // Update implements tea.Model.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -203,6 +231,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseMsg:
+		// No column drags while a modal is up: the confirmation prompt
+		// owns the footer and the help overlay replaces the table, so a
+		// drag's target row isn't even on screen.
+		if m.helpOpen || m.confirm != nil {
+			return m, nil
+		}
 		_, originY := m.renderHeader()
 		cols := m.table.Columns()
 		widths, changed := m.resizer.Handle(msg, cols, columnMinWidths(), 0, originY)
@@ -223,6 +257,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// The help overlay carries no actions of its own: any key closes
+		// it (ctrl+c excepted, which always quits).
+		if m.helpOpen {
+			if msg.String() == "ctrl+c" {
+				m.quitting = true
+				return m, tea.Quit
+			}
+			m.helpOpen = false
+			return m, nil
+		}
+		// The confirmation prompt is modal: y/enter answers it, n/esc
+		// cancels, every other key is swallowed so the dashboard state
+		// the prompt describes can't shift under an in-flight answer.
+		if m.confirm != nil {
+			switch msg.String() {
+			case "y", "enter":
+				c := m.confirm
+				m.confirm = nil
+				m.confirmToken++ // invalidate the pending auto-cancel tick
+				return m, confirmedCmd(c)
+			case "n", "esc":
+				m.confirm = nil
+				m.confirmToken++
+				return m, nil
+			case "ctrl+c":
+				m.quitting = true
+				return m, tea.Quit
+			default:
+				return m, nil
+			}
+		}
 		switch msg.String() {
 		case "q", "ctrl+c":
 			m.quitting = true
@@ -231,6 +296,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, pollCmd()
 		case "enter":
 			return m, m.enterCmd()
+		case "x":
+			cmd := m.startConfirm(confirmRemoveOne)
+			return m, cmd
+		case "X":
+			cmd := m.startConfirm(confirmForceOne)
+			return m, cmd
+		case "p":
+			cmd := m.startConfirm(confirmPruneStale)
+			return m, cmd
+		case "M":
+			cmd := m.startConfirm(confirmRemoveMerged)
+			return m, cmd
+		case "c":
+			if w, ok := m.selectedWorktree(); ok {
+				return m, copyCmd(w.Path)
+			}
+			return m, nil
+		case "m":
+			previousPath := m.selectedPath()
+			m.showMain = !m.showMain
+			m.redisplay(previousPath)
+			if m.showMain {
+				return m, m.notify("showing main worktrees", false)
+			}
+			return m, m.notify("hiding main worktrees", false)
+		case "?":
+			m.helpOpen = true
+			return m, nil
 		default:
 			var cmd tea.Cmd
 			m.table, cmd = m.table.Update(msg)
@@ -246,10 +339,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case openResultMsg:
-		m.notification = msg.result.Message
-		m.notifyIsError = !msg.result.OK
-		m.notifyToken++
-		return m, clearNotifyCmd(m.notifyToken)
+		return m, m.notify(msg.result.Message, !msg.result.OK)
+
+	case removeResultMsg:
+		text, isErr := removeSummary(msg.results)
+		cmd := m.notify(text, isErr)
+		// Refresh right away if anything actually got removed, so the row
+		// disappears now instead of on the next tick (up to interval
+		// away).
+		for _, r := range msg.results {
+			if r.Err == nil {
+				return m, tea.Batch(cmd, pollCmd())
+			}
+		}
+		return m, cmd
+
+	case copyResultMsg:
+		if msg.err != nil {
+			return m, m.notify("copy failed: "+firstLine(msg.err.Error()), true)
+		}
+		return m, m.notify("copied "+shortenHome(msg.path, m.home), false)
+
+	case cancelConfirmMsg:
+		if m.confirm != nil && msg.token == m.confirmToken {
+			m.confirm = nil
+			return m, m.notify("cancelled: no answer within "+confirmTimeout.String(), false)
+		}
+		return m, nil
 
 	case clearNotifyMsg:
 		if msg.token == m.notifyToken {
@@ -339,6 +455,66 @@ func (m Model) renderHeader() (text string, tableOriginY int) {
 	return text, lines + 1 // +1 for the blank separator line View puts before the table
 }
 
+// helpBindings is the ? overlay's content: every keybinding, including
+// the ones the one-line footer no longer has room for.
+var helpBindings = []struct{ key, desc string }{
+	{"↑/↓, pgup/pgdn", "move the selection"},
+	{"enter", "open or focus a VS Code window on the worktree"},
+	{"x", "remove the selected worktree (asks first; a merged branch is deleted, others kept)"},
+	{"X", "force remove: discard uncommitted changes, delete the branch even if unmerged"},
+	{"p", "prune every stale worktree registration (asks first)"},
+	{"M", "remove every merged worktree of the selected repo (asks first)"},
+	{"c", "copy the worktree path to the clipboard"},
+	{"m", "show or hide each repo's main worktree"},
+	{"r", "refresh now"},
+	{"mouse", "drag a column border on the header row to resize the two columns it joins"},
+	{"?", "this help"},
+	{"q", "quit"},
+}
+
+// helpView renders the ? overlay that replaces the table while helpOpen.
+func (m Model) helpView() string {
+	width := 0
+	for _, b := range helpBindings {
+		if w := runewidth.StringWidth(b.key); w > width {
+			width = w
+		}
+	}
+	lines := make([]string, 0, len(helpBindings)+1)
+	lines = append(lines, titleStyle.Render("keybindings"))
+	for _, b := range helpBindings {
+		pad := strings.Repeat(" ", width-runewidth.StringWidth(b.key))
+		lines = append(lines, "  "+b.key+pad+"  "+subtleStyle.Render(b.desc))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// footerView renders the bottom line: the confirmation prompt while one
+// is pending (it's modal and swallows all other keys, so it replaces
+// everything else), else the latest notification, else the default
+// keybinding hints, kept to the essentials now that ? opens the full
+// list.
+func (m Model) footerView() string {
+	if m.confirm != nil {
+		style := promptStyle
+		if m.confirm.kind == confirmForceOne {
+			style = errorStyle
+		}
+		return style.Render(m.confirmPrompt())
+	}
+	if m.notification != "" {
+		style := okStyle
+		if m.notifyIsError {
+			style = errorStyle
+		}
+		return style.Render(m.notification)
+	}
+	if m.helpOpen {
+		return subtleStyle.Render("any key closes")
+	}
+	return subtleStyle.Render("↑/↓ move · enter open/focus · x remove · ? help · q quit")
+}
+
 // View implements tea.Model.
 func (m Model) View() string {
 	if m.quitting {
@@ -347,23 +523,17 @@ func (m Model) View() string {
 
 	header, _ := m.renderHeader()
 
-	footer := subtleStyle.Render("↑/↓ move · enter open/focus · drag column border to resize · r refresh · q quit")
-	if m.notification != "" {
-		style := okStyle
-		if m.notifyIsError {
-			style = errorStyle
-		}
-		footer = style.Render(m.notification)
+	body := m.helpView()
+	if !m.helpOpen {
+		tableView := colorizeRows(m.table.View(), m.table.Columns(), colWorktree, colMerge)
+		// Marks each column border on the header row with a visible divider
+		// (see loam.DrawHeaderBorders' own doc) — otherwise the only cue for
+		// where a mouse drag needs to land is bubbles/table's own blank
+		// 2-space inter-cell gap, which doesn't look any different from the
+		// padding inside a cell.
+		body = loam.DrawHeaderBorders(tableView, m.table.Columns(), subtleStyle)
 	}
-
-	tableView := colorizeRows(m.table.View(), m.table.Columns(), colWorktree, colMerge)
-	// Marks each column border on the header row with a visible divider
-	// (see loam.DrawHeaderBorders' own doc) — otherwise the only cue for
-	// where a mouse drag needs to land is bubbles/table's own blank
-	// 2-space inter-cell gap, which doesn't look any different from the
-	// padding inside a cell.
-	tableView = loam.DrawHeaderBorders(tableView, m.table.Columns(), subtleStyle)
-	return header + "\n\n" + tableView + "\n\n" + footer + "\n"
+	return header + "\n\n" + body + "\n\n" + m.footerView() + "\n"
 }
 
 // Run starts the dashboard program and blocks until the user quits.

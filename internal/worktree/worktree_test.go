@@ -1,6 +1,8 @@
 package worktree
 
 import (
+	"errors"
+	"slices"
 	"testing"
 	"time"
 )
@@ -260,5 +262,46 @@ func TestListAllReturnsNilWhenWtIsNotOnPath(t *testing.T) {
 	// ever checking Available(), returning an empty set rather than an error.
 	if got := ListAll(nil); got != nil {
 		t.Fatalf("got %+v, want nil for no repo paths", got)
+	}
+}
+
+func TestRemoveArgsBuildsThePlainRemovalInvocation(t *testing.T) {
+	e := Entry{RepoPath: "/repo", Branch: "feat-x", Path: "/w/feat-x"}
+	got := removeArgs(e, RemoveOptions{})
+	want := []string{"-C", "/repo", "remove", "feat-x", "-y", "--foreground"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestRemoveArgsAppendsTheForceFlags(t *testing.T) {
+	e := Entry{RepoPath: "/repo", Branch: "feat-x", Path: "/w/feat-x"}
+	got := removeArgs(e, RemoveOptions{Force: true, ForceDelete: true})
+	want := []string{"-C", "/repo", "remove", "feat-x", "-y", "--foreground", "-f", "-D"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestPruneStaleArgsDropsOneRegistrationByPath(t *testing.T) {
+	// Stale entries go through git, not wt (wt refuses a worktree whose
+	// directory is already gone), and by path, not branch (a detached
+	// stale entry may have no branch name at all).
+	e := Entry{RepoPath: "/repo", Path: "/w/gone"}
+	got := pruneStaleArgs(e)
+	want := []string{"-C", "/repo", "worktree", "remove", "--force", "/w/gone"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestRemoveErrorLeadsWithTheCommandOutput(t *testing.T) {
+	err := &RemoveError{Branch: "feat-x", Output: "wt: worktree has uncommitted changes", Err: errors.New("exit status 1")}
+	if got := err.Error(); got != "wt: worktree has uncommitted changes" {
+		t.Fatalf("got %q, want the command output, not the exit status", got)
+	}
+	empty := &RemoveError{Branch: "feat-x", Err: errors.New("exit status 1")}
+	if got := empty.Error(); got != "exit status 1" {
+		t.Fatalf("got %q, want the wrapped error when there's no output", got)
 	}
 }

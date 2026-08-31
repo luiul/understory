@@ -2,11 +2,14 @@
 
 A live radar for git worktrees: every worktree of every repo it knows
 about (see "Worktree discovery" below), most recently committed first,
-with open-or-focus-a-VS-Code-window on Enter.
+with open-or-focus-a-VS-Code-window on Enter and confirmed removal on
+`x`.
 
-understory is the read-only, always-on counterpart to `wt`/coppice, which
-do the actual worktree work; see [Ecosystem](#ecosystem) below for how
-all the pieces fit together.
+understory is the always-on counterpart to `wt`/coppice, which do the
+actual worktree work; see [Ecosystem](#ecosystem) below for how
+all the pieces fit together. It stays read-only except for one triage
+action: removing worktrees, delegated to `wt remove` with a
+confirmation prompt (see [Actions](#actions) below).
 
 ## Ecosystem
 
@@ -18,7 +21,7 @@ tools, one pair for git worktrees, one pair for agent sessions:
 |---|---|---|
 | [`wt`](https://worktrunk.dev) (worktrunk) | engine | creates/removes worktrees, runs lifecycle hooks (`post-start`, `pre-remove`, ...), maintains the shared registry |
 | [coppice](https://github.com/luiul/coppice) | lifecycle CLI | cross-repo `new`/`list`/`remove`/`clean` worktrees, on top of `wt`, from anywhere on disk |
-| **understory** (this repo) | worktree radar | live, read-only dashboard of every worktree in the registry; open-or-focus a VS Code window on Enter |
+| **understory** (this repo) | worktree radar | live dashboard of every worktree in the registry; open-or-focus a VS Code window on Enter, remove with confirmation on `x` |
 | [canopy](https://github.com/luiul/canopy) | agent radar | live, read-only dashboard of every agent CLI session on the machine; jump-to-window on Enter |
 
 ```mermaid
@@ -58,7 +61,7 @@ Repo                  Branch          Created   Worktree  Merge      Path
 luiul/understory      hide-main-wt    12s       dirty     unmerged   ~/worktrees/.../understory
 hellofresh/isa-orch…  fix-writeback   3d        clean     unmerged   ~/worktrees/.../isa-orchestration
 
-↑/↓ move · enter open/focus · drag column border to resize · r refresh · q quit
+↑/↓ move · enter open/focus · x remove · ? help · q quit
 ```
 
 (the currently selected row also gets a full-width grey highlight in the
@@ -126,6 +129,30 @@ mycelium package to jump to whichever window is running a given agent,
 so this switch-or-create behavior lives in one shared place instead of
 being duplicated across both tools.
 
+## Actions
+
+Everything other than removal is read-only. The removal keybindings all
+ask for confirmation first (`y`/`enter` confirms, `n`/`esc` cancels, and
+an unanswered prompt cancels itself after 10 seconds, since rows keep
+repolling and reordering underneath it), then delegate to `wt remove`
+(`git worktree remove --force` for stale registrations), the same
+commands `cop remove` wraps:
+
+| Key | Action |
+|---|---|
+| `x` | Remove the selected worktree. `wt` refuses one with uncommitted changes and deletes the branch only if merged; the prompt says which applies to the selected row. |
+| `X` | Force remove: discards uncommitted changes and deletes the branch even if unmerged. |
+| `p` | Prune every stale worktree registration (directories already gone; drops only the git metadata). |
+| `M` | Remove every merged worktree of the selected row's repo, branches included. |
+| `c` | Copy the selected worktree's full path to the clipboard. |
+| `m` | Show or hide each repo's main worktree (same as `--show-main`, at runtime). |
+| `?` | Full keybinding list. |
+
+A removal's result (including `wt`'s own refusal reason, with a hint at
+`X` when it refused a dirty worktree) shows on the status line, and a
+successful removal refreshes the view immediately rather than waiting
+for the next poll.
+
 ## Worktree discovery
 
 understory reads the same shared `~/.cache/wt/known-repos` registry `wt`'s
@@ -165,7 +192,8 @@ dashboard.
   open-on-Enter via
   [`github.com/luiul/dashkit/mycelium`](https://github.com/luiul/dashkit/tree/main/mycelium)'s
   shared open-or-focus logic — the same package canopy uses to jump to
-  whichever window is running a given agent — notifications).
+  whichever window is running a given agent — notifications, and the
+  confirmed-removal modal behind x/X/p/M).
 - `cmd/understory`: the CLI entry point (flags, version).
 
 ## Install
