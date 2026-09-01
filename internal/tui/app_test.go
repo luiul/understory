@@ -100,6 +100,17 @@ func TestStaleClearNotifyMsgIsIgnored(t *testing.T) {
 	}
 }
 
+func TestFocusMsgTriggersAnImmediatePoll(t *testing.T) {
+	// Switching to understory's window must refresh right away (see the
+	// tea.FocusMsg case in Update): a worktree created in another window
+	// can't wait up to interval for the next tick.
+	m := New(999, false)
+	_, cmd := m.Update(tea.FocusMsg{})
+	if cmd == nil {
+		t.Fatal("want a poll command on focus")
+	}
+}
+
 func TestQuitKeyStopsTheProgram(t *testing.T) {
 	m := New(999, false)
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})

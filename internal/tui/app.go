@@ -36,7 +36,10 @@ import (
 // DefaultInterval is the poll interval used when none is given. `wt list`
 // runs several git subprocesses per worktree it reports on, so this is
 // deliberately slow: worktree state doesn't change anywhere near as often
-// as, say, an agent's CPU usage.
+// as, say, an agent's CPU usage. The staleness that buys is capped by the
+// focus refresh (see the tea.FocusMsg case in Update): the moment the user
+// switches to understory's window, a fresh poll runs, so the slow interval
+// is only ever observed by a window nobody is looking at.
 const DefaultInterval = 15 * time.Second
 
 const notifyDuration = 4 * time.Second
@@ -335,6 +338,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		return m, tea.Batch(pollCmd(), tickCmd(m.interval))
 
+	case tea.FocusMsg:
+		// The user just switched to this window, which is almost always
+		// the moment they read the table — and the typical flow is
+		// creating a worktree in another window (cop new, jira-worktree)
+		// and then switching here to check it showed up. Without this, a
+		// worktree created seconds ago is invisible until the next tick
+		// (up to interval away), which reads as "understory isn't listing
+		// it". Poll immediately on focus instead of making the user wait
+		// or hit r. This is an extra poll on top of the tick chain, which
+		// keeps its own cadence either way.
+		return m, pollCmd()
+
 	case pollResultMsg:
 		m.applyWorktrees(msg.worktrees)
 		return m, nil
@@ -537,7 +552,11 @@ func (m Model) View() string {
 // Run starts the dashboard program and blocks until the user quits.
 // showMain controls whether each repo's main worktree is shown; see New.
 func Run(interval time.Duration, showMain bool) error {
-	p := tea.NewProgram(New(interval, showMain), tea.WithAltScreen(), tea.WithMouseCellMotion())
+	// WithReportFocus so the tea.FocusMsg case in Update ever fires at all:
+	// without it the terminal never sends focus-in events. Terminals that
+	// don't support focus reporting simply never deliver the message, which
+	// degrades to today's tick-only behavior.
+	p := tea.NewProgram(New(interval, showMain), tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithReportFocus())
 	_, err := p.Run()
 	return err
 }

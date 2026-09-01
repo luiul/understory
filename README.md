@@ -176,6 +176,12 @@ already listed, so the view isn't empty by default for a repo that's
 never gone through `wt`/coppice. Requires `wt` on PATH for any data at
 all; without it, understory says so instead of showing an empty list.
 
+The view polls on a slow interval (worktree state barely changes), but
+also refreshes the moment the terminal window regains focus: the typical
+flow is creating a worktree in another window (`cop new`, jira-worktree)
+and then switching to understory to check it, and a worktree created
+seconds ago shouldn't be invisible until the next tick.
+
 ## What this deliberately doesn't do
 
 There's no notion of "live" (an agent currently working inside a given
