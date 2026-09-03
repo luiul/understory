@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"regexp"
 	"strconv"
 	"strings"
@@ -146,12 +147,12 @@ func TestApplyWorktreesKeepsThePreviouslySelectedPathSelected(t *testing.T) {
 }
 
 func TestBuildWorktreeRowsPlaceholderWhenEmpty(t *testing.T) {
-	rows := buildWorktreeRows(nil, 0, "", time.Now())
+	rows := buildWorktreeRows(nil, 0, "", time.Now(), nil)
 	if len(rows) != 1 {
 		t.Fatalf("got %d rows, want 1 placeholder row", len(rows))
 	}
-	if len(rows[0]) != 6 {
-		t.Fatalf("got %d cells, want 6 to match worktreeColumns", len(rows[0]))
+	if len(rows[0]) != 7 {
+		t.Fatalf("got %d cells, want 7 to match worktreeColumns", len(rows[0]))
 	}
 }
 
@@ -171,7 +172,7 @@ func TestBuildWorktreeRowsCreatedColumnUsesCreatedTimeNotCommitTime(t *testing.T
 		CreatedTime: time.Now().Add(-3 * 24 * time.Hour),
 	}
 
-	rows := buildWorktreeRows([]worktree.Entry{w}, -1, "", time.Now())
+	rows := buildWorktreeRows([]worktree.Entry{w}, -1, "", time.Now(), nil)
 
 	if got := rows[0][colCreated]; got != "3d" {
 		t.Fatalf("got %q, want \"3d\" (from CreatedTime, not CommitTime's ~0s)", got)
@@ -179,7 +180,7 @@ func TestBuildWorktreeRowsCreatedColumnUsesCreatedTimeNotCommitTime(t *testing.T
 }
 
 func TestBuildWorktreeRowsTagsTheCursorRowsCreatedCell(t *testing.T) {
-	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), wtEntry("/w/b", "b", 0)}, 1, "", time.Now())
+	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), wtEntry("/w/b", "b", 0)}, 1, "", time.Now(), nil)
 	if strings.Contains(rows[0][colCreated], cursorSentinel) {
 		t.Fatalf("got cursorSentinel on non-cursor row 0's Created cell %q, want it absent", rows[0][colCreated])
 	}
@@ -192,7 +193,7 @@ func TestBuildWorktreeRowsBlanksTheRepeatedRepoLabelWithinAGroup(t *testing.T) {
 	// Same repo (acme/widgets) back to back: only the first row should
 	// carry the label, so the group reads as one block instead of
 	// repeating the same text down every row.
-	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), wtEntry("/w/b", "b", time.Hour)}, 0, "", time.Now())
+	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), wtEntry("/w/b", "b", time.Hour)}, 0, "", time.Now(), nil)
 	if rows[0][colRepo] != "acme/widgets" {
 		t.Fatalf("got %q, want the first row of a group to carry its repo label", rows[0][colRepo])
 	}
@@ -202,7 +203,7 @@ func TestBuildWorktreeRowsBlanksTheRepeatedRepoLabelWithinAGroup(t *testing.T) {
 }
 
 func TestBuildWorktreeRowsRelabelsWhenTheRepoChanges(t *testing.T) {
-	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), otherRepoEntry("/w/b", "b", time.Hour)}, 0, "", time.Now())
+	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), otherRepoEntry("/w/b", "b", time.Hour)}, 0, "", time.Now(), nil)
 	if rows[0][colRepo] != "acme/widgets" || rows[1][colRepo] != "other/gizmos" {
 		t.Fatalf("got %q, %q, want both distinct repo labels shown", rows[0][colRepo], rows[1][colRepo])
 	}
@@ -239,12 +240,72 @@ func TestBuildWorktreeRowsShowsWorktreeAndMergeColumns(t *testing.T) {
 	w := wtEntry("/w/a", "a", 0)
 	w.Dirty = true
 	w.MergeStatus = worktree.MergeStatusUnmerged
-	rows := buildWorktreeRows([]worktree.Entry{w}, 0, "", time.Now())
+	rows := buildWorktreeRows([]worktree.Entry{w}, 0, "", time.Now(), nil)
 	if rows[0][colWorktree] != "dirty" {
 		t.Fatalf("got %q, want the Worktree cell to read dirty", rows[0][colWorktree])
 	}
 	if rows[0][colMerge] != worktree.MergeStatusUnmerged {
 		t.Fatalf("got %q, want the Merge cell to read %q", rows[0][colMerge], worktree.MergeStatusUnmerged)
+	}
+}
+
+// fakeVSCodeSnapshot implements the vscodeSnapshot seam with a canned
+// open set (or a listing error), so the column's poll-to-cell path is
+// testable without osascript; mycelium's own suite covers the matching
+// itself.
+type fakeVSCodeSnapshot struct {
+	open   map[string]bool
+	err    error
+	noCall bool // set when IsOpen must never be called (a failed listing)
+}
+
+func (f fakeVSCodeSnapshot) Err() error { return f.err }
+
+func (f fakeVSCodeSnapshot) IsOpen(path, branch string) bool {
+	if f.noCall {
+		panic("IsOpen called on a failed listing; vscodeStates must not query it")
+	}
+	return f.open[path]
+}
+
+func TestVSCodeStatesMapsOpenAndClosedPerPath(t *testing.T) {
+	entries := []worktree.Entry{wtEntry("/w/a", "a", 0), wtEntry("/w/b", "b", 0)}
+	snapshot := fakeVSCodeSnapshot{open: map[string]bool{"/w/a": true}}
+
+	states := vscodeStates(entries, snapshot)
+
+	if states["/w/a"] != vscodeOpen || states["/w/b"] != vscodeClosed {
+		t.Fatalf("got %v, want /w/a open and /w/b closed", states)
+	}
+}
+
+func TestVSCodeStatesReportsUnknownForAFailedListing(t *testing.T) {
+	entries := []worktree.Entry{wtEntry("/w/a", "a", 0)}
+	snapshot := fakeVSCodeSnapshot{err: errors.New("not authorized"), noCall: true}
+
+	states := vscodeStates(entries, snapshot)
+
+	if states["/w/a"] != vscodeUnknown {
+		t.Fatalf("got %v, want vscodeUnknown (a failed listing can't claim closed)", states["/w/a"])
+	}
+}
+
+func TestBuildWorktreeRowsShowsTheVSCodeColumn(t *testing.T) {
+	entries := []worktree.Entry{wtEntry("/w/a", "a", 0), wtEntry("/w/b", "b", 0), wtEntry("/w/c", "c", 0)}
+	vscode := map[string]vscodeState{"/w/a": vscodeOpen, "/w/b": vscodeClosed}
+
+	rows := buildWorktreeRows(entries, 0, "", time.Now(), vscode)
+
+	if got := rows[0][colVSCode]; got != "open" {
+		t.Fatalf("got %q, want %q", got, "open")
+	}
+	if got := rows[1][colVSCode]; got != "-" {
+		t.Fatalf("got %q, want %q (checked, nothing open)", got, "-")
+	}
+	// /w/c is missing from the map: a worktree with no answer renders
+	// the zero-value unknown, never a bare "-".
+	if got := rows[2][colVSCode]; got != "?" {
+		t.Fatalf("got %q, want %q (no answer for this path)", got, "?")
 	}
 }
 
@@ -449,7 +510,7 @@ func TestWorktreeColumnsPathKeepsItsFloorWheneverThereIsRoom(t *testing.T) {
 	// With no worktrees, every column sits at its default floor, so any
 	// terminal wide enough for the defaults plus minPathWidth must give
 	// Path at least minPathWidth.
-	need := repoColWidth + branchColWidth + createdColWidth + worktreeColWidth + mergeColWidth + 2*6
+	need := repoColWidth + branchColWidth + createdColWidth + worktreeColWidth + mergeColWidth + vscodeColWidth + 2*7
 	cols := worktreeColumns(need+minPathWidth, nil, nil)
 	last := cols[len(cols)-1]
 	if last.Width < minPathWidth {
@@ -470,7 +531,7 @@ func TestWorktreeColumnsNeverOverflowsTheTerminal(t *testing.T) {
 	longBranch.Repo = "tardis-community"
 	worktrees := []worktree.Entry{longRepo, longBranch}
 
-	const width = 120
+	const width = 125
 	cols := worktreeColumns(width, worktrees, nil)
 
 	total := 2 * len(cols)
@@ -480,7 +541,7 @@ func TestWorktreeColumnsNeverOverflowsTheTerminal(t *testing.T) {
 	if total > width {
 		t.Fatalf("got total table width %d, want <= terminal width %d", total, width)
 	}
-	// Path keeps its full floor; the 10 missing columns come out of
+	// Path keeps its full floor; the 16 missing columns come out of
 	// Branch's growth (the widest growable column), Repo stays untouched.
 	if got := cols[colPath].Width; got != minPathWidth {
 		t.Fatalf("got Path width %d, want %d", got, minPathWidth)
@@ -488,7 +549,7 @@ func TestWorktreeColumnsNeverOverflowsTheTerminal(t *testing.T) {
 	if got, want := cols[colRepo].Width, 27; got != want {
 		t.Fatalf("got Repo width %d, want %d (untouched, it isn't the widest)", got, want)
 	}
-	if got, want := cols[colBranch].Width, 35; got != want {
+	if got, want := cols[colBranch].Width, 30; got != want {
 		t.Fatalf("got Branch width %d, want %d (its growth shed to fit)", got, want)
 	}
 }
@@ -504,7 +565,7 @@ func TestWorktreeColumnsWaterFillsRepoAndBranchWhenBothMustShrink(t *testing.T) 
 	longBranch.Owner = "hellofresh"
 	longBranch.Repo = "tardis-community"
 
-	const width = 100
+	const width = 110
 	cols := worktreeColumns(width, []worktree.Entry{longRepo, longBranch}, nil)
 
 	total := 2 * len(cols)
@@ -538,7 +599,7 @@ func TestWorktreeColumnsPathDipsBelowItsFloorOnlyOnceGrowthIsExhausted(t *testin
 	longBranch.Owner = "hellofresh"
 	longBranch.Repo = "tardis-community"
 
-	const width = 90
+	const width = 95
 	cols := worktreeColumns(width, []worktree.Entry{longRepo, longBranch}, nil)
 
 	if got, want := cols[colRepo].Width, repoColWidth; got != want {
@@ -547,7 +608,7 @@ func TestWorktreeColumnsPathDipsBelowItsFloorOnlyOnceGrowthIsExhausted(t *testin
 	if got, want := cols[colBranch].Width, branchColWidth; got != want {
 		t.Fatalf("got Branch width %d, want its default floor %d", got, want)
 	}
-	if got, want := cols[colPath].Width, 16; got != want {
+	if got, want := cols[colPath].Width, 11; got != want {
 		t.Fatalf("got Path width %d, want %d (below its floor, but the table fits)", got, want)
 	}
 }

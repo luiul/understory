@@ -93,6 +93,11 @@ func shortenHome(path, home string) string {
 type tickMsg struct{}
 type pollResultMsg struct {
 	worktrees []worktree.Entry
+	// vscode maps each polled worktree's path to its VS Code window
+	// state (see vscodeStates), captured by the same poll so the column
+	// never renders one poll's worktrees against another poll's window
+	// listing.
+	vscode map[string]vscodeState
 }
 type openResultMsg struct{ result mycelium.Result }
 type clearNotifyMsg struct{ token int }
@@ -107,6 +112,13 @@ type Model struct {
 
 	worktrees []worktree.Entry // every known worktree, raw (unsorted) from the last successful poll
 	cursor    int              // remembers selection by-path across polls; table.Cursor() is the live ground truth while running
+
+	// vscode is the last poll's per-path VS Code window states (see
+	// pollResultMsg), read by buildWorktreeRows for the VS Code column.
+	// Nil before the first poll lands; a nil map renders every row as
+	// vscodeUnknown ("?"), the honest answer before any listing has
+	// succeeded.
+	vscode map[string]vscodeState
 
 	table table.Model
 
@@ -186,7 +198,10 @@ func tickCmd(interval time.Duration) tea.Cmd {
 func pollCmd() tea.Cmd {
 	return func() tea.Msg {
 		entries := worktree.ListAll(worktree.KnownRepoPaths())
-		return pollResultMsg{worktrees: entries}
+		// One window listing per poll, shared across every row's query
+		// (see mycelium.SnapshotVSCode): the listing is one osascript
+		// call, and git work-tree lookups are memoized across rows.
+		return pollResultMsg{worktrees: entries, vscode: vscodeStates(entries, snapshotVSCode())}
 	}
 }
 
@@ -196,6 +211,44 @@ func pollCmd() tea.Cmd {
 // real `code` CLI; mycelium's own test suite covers the window-detection
 // logic itself in depth.
 var openVSCode = mycelium.OpenVSCode
+
+// vscodeSnapshot is the slice of mycelium.VSCodeSnapshot a poll needs,
+// kept to an interface so tests can feed vscodeStates a fake without
+// osascript (see the fakeVSCodeSnapshot in worktrees_test.go).
+type vscodeSnapshot interface {
+	Err() error
+	IsOpen(path, branch string) bool
+}
+
+// snapshotVSCode is a package-level seam onto mycelium.SnapshotVSCode,
+// the same pattern as openVSCode above.
+var snapshotVSCode = func() vscodeSnapshot { return mycelium.SnapshotVSCode() }
+
+// vscodeStates maps each entry's path to its VS Code window state for
+// this poll. A failed listing (snapshot.Err, most likely the macOS
+// Automation permission not granted yet) marks every row vscodeUnknown:
+// the snapshot can't tell open from closed, so the column renders "?"
+// rather than a wrong "-". Everything else defers to the snapshot's own
+// match cascade, which is Enter's open-or-focus one (see
+// mycelium.SnapshotVSCode): a row reads "open" exactly when Enter would
+// focus an existing window.
+func vscodeStates(entries []worktree.Entry, snapshot vscodeSnapshot) map[string]vscodeState {
+	states := make(map[string]vscodeState, len(entries))
+	if snapshot.Err() != nil {
+		for _, e := range entries {
+			states[e.Path] = vscodeUnknown
+		}
+		return states
+	}
+	for _, e := range entries {
+		if snapshot.IsOpen(e.Path, e.Branch) {
+			states[e.Path] = vscodeOpen
+		} else {
+			states[e.Path] = vscodeClosed
+		}
+	}
+	return states
+}
 
 func openCmd(path, branch string) tea.Cmd {
 	return func() tea.Msg {
@@ -351,6 +404,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, pollCmd()
 
 	case pollResultMsg:
+		m.vscode = msg.vscode
 		m.applyWorktrees(msg.worktrees)
 		return m, nil
 
@@ -431,7 +485,7 @@ func clampCursor(idx, n int) int {
 // waiting for the next poll.
 func (m *Model) refreshCursorMarker() {
 	m.cursor = clampCursor(m.table.Cursor(), len(m.displayedWorktrees()))
-	m.table.SetRows(buildWorktreeRows(m.displayedWorktrees(), m.cursor, m.home, time.Now()))
+	m.table.SetRows(buildWorktreeRows(m.displayedWorktrees(), m.cursor, m.home, time.Now(), m.vscode))
 }
 
 // resize rebuilds columns (Path's width depends on m.width) and rows for
@@ -446,7 +500,7 @@ func (m *Model) resize() {
 	// match panics if the two are ever briefly out of sync mid-update.
 	m.table.SetRows(nil)
 	m.table.SetColumns(worktreeColumns(m.width, m.displayedWorktrees(), m.colOverrides))
-	m.table.SetRows(buildWorktreeRows(m.displayedWorktrees(), cursor, m.home, time.Now()))
+	m.table.SetRows(buildWorktreeRows(m.displayedWorktrees(), cursor, m.home, time.Now(), m.vscode))
 	m.table.SetCursor(cursor)
 }
 

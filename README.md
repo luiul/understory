@@ -57,9 +57,9 @@ for the one piece of that old view intentionally not carried over.
 understory — worktrees on this machine
 2 worktrees
 
-Repo                  Branch          Created   Worktree  Merge      Path
-luiul/understory      hide-main-wt    12s       dirty     unmerged   ~/worktrees/.../understory
-hellofresh/isa-orch…  fix-writeback   3d        clean     unmerged   ~/worktrees/.../isa-orchestration
+Repo                  Branch          Created   Worktree  Merge      VS Code  Path
+luiul/understory      hide-main-wt    12s       dirty     unmerged   open     ~/worktrees/.../understory
+hellofresh/isa-orch…  fix-writeback   3d        clean     unmerged   -        ~/worktrees/.../isa-orchestration
 
 ↑/↓ move · enter open/focus · x remove · ? help · q quit
 ```
@@ -89,7 +89,12 @@ that growth first (longest-first, so truncation hits the longest values
 first) and only then does Path dip below its own preferred width — the
 table never overflows the terminal's right edge. Worktree/Merge are
 plain-word renderings of `wt`'s own compact status glyphs
-(dirty/ahead/behind), rather than the glyphs themselves.
+(dirty/ahead/behind), rather than the glyphs themselves. The VS Code
+column tells you whether a VS Code window is already open on the
+worktree (`open`, `-`, or `?` when the window listing itself couldn't
+be read): it answers with the exact same already-open check Enter's
+open-or-focus runs (see below), so `open` means Enter would focus that
+window rather than open a new one.
 
 Each internal column border can be dragged with the mouse to widen or
 narrow it: the two columns it sits between trade width between
@@ -102,9 +107,9 @@ each border on the header row (see
 `DrawHeaderBorders`) so there's something to aim the drag at, rather than
 an invisible 2-space gap. Every border can move in both directions:
 each column can shrink down to the width its values still fit (Repo/
-Branch their defaults, Created/Worktree/Merge their widest possible
-value — a narrower drag truncates only the header title, never a
-value), and Path down to its own floor. A resize sticks across polls:
+Branch their defaults, Created/Worktree/Merge/VS Code their widest
+possible value — a narrower drag truncates only the header title, never
+a value), and Path down to its own floor. A resize sticks across polls:
 the dragged column's width is pinned exactly where you left it, even
 when a freshly polled longer label would have grown it (the label
 ellipsizes until you drag wider again) — only a terminal resize resets

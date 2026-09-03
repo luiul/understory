@@ -19,8 +19,9 @@ import (
 // label/branch name is longest, so a long owner/repo name or branch name
 // is never truncated the way a fixed width would — as long as the
 // terminal actually has room for everything (see worktreeColumns for
-// what gives when it doesn't). Created/Worktree/Merge stay fixed; Path
-// gets whatever's left after all of those, floored at minPathWidth.
+// what gives when it doesn't). Created/Worktree/Merge/VS Code stay
+// fixed; Path gets whatever's left after all of those, floored at
+// minPathWidth.
 //
 // Every fixed width is at least its header title's width plus one: the
 // header's column-border glyph (loam.DrawHeaderBorders) sits immediately
@@ -37,39 +38,46 @@ const (
 	createdColWidth  = 8
 	worktreeColWidth = 9
 	mergeColWidth    = 9
+	vscodeColWidth   = 8
 	minPathWidth     = 20
 	hardMinColWidth  = 8
 )
 
-// createdContentWidth, worktreeContentWidth, and mergeContentWidth are
-// the widest values the Created/Worktree/Merge columns ever display:
-// humanizeSince tops out at "23h59m" (6) before switching to "%dd",
-// the working-tree states are all five letters, and "unmerged" and
-// "conflict" tie for the longest merge status at eight. These are the columns' drag minimums (see
-// columnMinWidths): a user dragging one of them narrower than its
-// default truncates the header title ("Worktre…") but never a value —
-// the same "a drag is a deliberate choice" deal Repo/Branch get, which
-// is what makes their borders draggable at all (at the default width
-// both sides of the border would already sit at their minimums, leaving
-// zero room to trade in either direction).
+// createdContentWidth, worktreeContentWidth, mergeContentWidth, and
+// vscodeContentWidth are the widest values the Created/Worktree/Merge/
+// VS Code columns ever display: humanizeSince tops out at "23h59m" (6)
+// before switching to "%dd", the working-tree states are all five
+// letters, "unmerged" and "conflict" tie for the longest merge status
+// at eight, and the VS Code states top out at "open" (4). These are the
+// columns' drag minimums (see columnMinWidths): a user dragging one of
+// them narrower than its default truncates the header title
+// ("Worktre…") but never a value — the same "a drag is a deliberate
+// choice" deal Repo/Branch get, which is what makes their borders
+// draggable at all (at the default width both sides of the border would
+// already sit at their minimums, leaving zero room to trade in either
+// direction).
 const (
 	createdContentWidth  = 6
 	worktreeContentWidth = 5
 	mergeContentWidth    = 8
+	vscodeContentWidth   = 4
 )
 
 // Column indexes into both worktreeColumns' return value and each
 // buildWorktreeRows row, in display order. colorizeRows (see colorize.go)
-// uses colWorktree/colMerge to recolor those two columns post-render.
-// There's no dedicated cursor column: see loam.Sentinel's doc (loam pkg)
-// for how the selected row is identified instead now that the whole row
-// is highlighted (colorize.go) rather than a leading marker glyph.
+// uses colWorktree/colMerge to recolor those two columns post-render;
+// the VS Code column renders in the default plain style, like
+// Created/Path. There's no dedicated cursor column: see loam.Sentinel's
+// doc (loam pkg) for how the selected row is identified instead now that
+// the whole row is highlighted (colorize.go) rather than a leading
+// marker glyph.
 const (
 	colRepo = iota
 	colBranch
 	colCreated
 	colWorktree
 	colMerge
+	colVSCode
 	colPath
 )
 
@@ -145,6 +153,7 @@ func worktreeColumns(width int, worktrees []worktree.Entry, overrides map[int]in
 		{Title: "Created", Width: createdColWidth},
 		{Title: "Worktree", Width: worktreeColWidth},
 		{Title: "Merge", Width: mergeColWidth},
+		{Title: "VS Code", Width: vscodeColWidth},
 	}
 
 	used := 0
@@ -235,6 +244,7 @@ func columnMinWidths() []int {
 		createdContentWidth,
 		worktreeContentWidth,
 		mergeContentWidth,
+		vscodeContentWidth,
 		minPathWidth,
 	}
 }
@@ -363,7 +373,7 @@ func (m *Model) redisplay(previousPath string) {
 	// set, so a column/row count mismatch mid-update panics).
 	m.table.SetRows(nil)
 	m.table.SetColumns(worktreeColumns(m.width, newDisplayed, m.colOverrides))
-	m.table.SetRows(buildWorktreeRows(newDisplayed, m.cursor, m.home, time.Now()))
+	m.table.SetRows(buildWorktreeRows(newDisplayed, m.cursor, m.home, time.Now(), m.vscode))
 	m.table.SetCursor(m.cursor)
 }
 
@@ -382,12 +392,47 @@ func (m Model) selectedWorktree() (worktree.Entry, bool) {
 	return displayed[idx], true
 }
 
+// vscodeState is the VS Code column's per-worktree tri-state: whether
+// a VS Code window is currently open on the worktree, answered by
+// mycelium's read-only snapshot once per poll (see vscodeStates). The
+// same match cascade Enter's open-or-focus runs backs it, so "open"
+// means Enter would focus an existing window rather than open a new
+// one.
+type vscodeState int
+
+const (
+	// vscodeUnknown is the zero value on purpose: a worktree missing
+	// from the poll's map (or a poll whose window listing failed, most
+	// likely because the macOS Automation permission hasn't been
+	// granted yet) renders "?" — the listing can't claim "not open",
+	// so the cell never does either.
+	vscodeUnknown vscodeState = iota
+	vscodeClosed              // checked, no window open on this worktree
+	vscodeOpen                // a window is open on this worktree
+)
+
+// vscodeCell renders the VS Code column's plain-word cell: "open", "-"
+// for none (the Merge column's own not-applicable word), "?" for
+// unknown (canopy's Location column's own convention).
+func vscodeCell(state vscodeState) string {
+	switch state {
+	case vscodeOpen:
+		return "open"
+	case vscodeUnknown:
+		return "?"
+	default:
+		return "-"
+	}
+}
+
 // buildWorktreeRows constructs the view's rows from an already-sorted
 // (see sortWorktrees) worktree list. cursor picks which row gets tagged
 // with loam.Sentinel (see loam pkg doc) so colorize.go's
 // colorizeRows knows to highlight that row's whole line; there's no
 // dedicated cursor column/glyph to place it in any more, now that the
-// row highlight itself is the selection indicator.
+// row highlight itself is the selection indicator. vscode carries the
+// latest poll's per-path VS Code window states (see vscodeStates); a
+// missing entry renders as vscodeUnknown.
 //
 // The Repo cell is only printed on the first row of each repo's block:
 // sortWorktrees already guarantees every worktree of the same repo is
@@ -403,9 +448,9 @@ func (m Model) selectedWorktree() (worktree.Entry, bool) {
 // the same two plain-word signals coppice's own worktree table shows:
 // whether the working tree itself is dirty/clean/stale, and separately
 // whether the branch has been merged into main yet.
-func buildWorktreeRows(worktrees []worktree.Entry, cursor int, home string, now time.Time) []table.Row {
+func buildWorktreeRows(worktrees []worktree.Entry, cursor int, home string, now time.Time, vscode map[string]vscodeState) []table.Row {
 	if len(worktrees) == 0 {
-		return []table.Row{{"", "", "", "", "", noWorktreesMessage()}}
+		return []table.Row{{"", "", "", "", "", "", noWorktreesMessage()}}
 	}
 
 	rows := make([]table.Row, len(worktrees))
@@ -433,6 +478,7 @@ func buildWorktreeRows(worktrees []worktree.Entry, cursor int, home string, now 
 			created,
 			worktreeStatusLabel(w),
 			mergeStatusLabel(w),
+			vscodeCell(vscode[w.Path]),
 			shortenHome(w.Path, home),
 		}
 	}

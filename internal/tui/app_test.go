@@ -240,8 +240,9 @@ func TestMouseDragOnlyResizesTheTwoColumnsStraddlingTheDraggedBorder(t *testing.
 	cols := m.table.Columns()
 	_, originY := m.renderHeader()
 	borderX := mergeBorderX(cols)
-	oldMergeWidth, oldPathWidth := cols[colMerge].Width, cols[colPath].Width
+	oldMergeWidth, oldVSCodeWidth := cols[colMerge].Width, cols[colVSCode].Width
 	oldRepoWidth, oldCreatedWidth := cols[colRepo].Width, cols[colCreated].Width
+	oldPathWidth := cols[colPath].Width
 
 	updated, _ := m.Update(tea.MouseMsg{X: borderX, Y: originY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 	m = updated.(Model)
@@ -252,8 +253,8 @@ func TestMouseDragOnlyResizesTheTwoColumnsStraddlingTheDraggedBorder(t *testing.
 	if got, want := gotCols[colMerge].Width, oldMergeWidth+4; got != want {
 		t.Fatalf("Merge width = %d, want %d", got, want)
 	}
-	if got, want := gotCols[colPath].Width, oldPathWidth-4; got != want {
-		t.Fatalf("Path width = %d, want %d (its own left-hand neighbor absorbs the drag)", got, want)
+	if got, want := gotCols[colVSCode].Width, oldVSCodeWidth-4; got != want {
+		t.Fatalf("VS Code width = %d, want %d (its own left-hand neighbor absorbs the drag)", got, want)
 	}
 	// Every column not touching the dragged border must stay put.
 	if got := gotCols[colRepo].Width; got != oldRepoWidth {
@@ -261,6 +262,9 @@ func TestMouseDragOnlyResizesTheTwoColumnsStraddlingTheDraggedBorder(t *testing.
 	}
 	if got := gotCols[colCreated].Width; got != oldCreatedWidth {
 		t.Fatalf("Created width = %d, want unchanged %d", got, oldCreatedWidth)
+	}
+	if got := gotCols[colPath].Width; got != oldPathWidth {
+		t.Fatalf("Path width = %d, want unchanged %d", got, oldPathWidth)
 	}
 }
 
@@ -428,8 +432,8 @@ func TestMouseDragRecordsOnlyTheTwoDraggedColumns(t *testing.T) {
 		t.Fatal("want colOverrides recorded after a drag")
 	}
 	for i := range m.colOverrides {
-		if i != colMerge && i != colPath {
-			t.Fatalf("colOverrides pins column %d, want only the dragged pair (%d, %d)", i, colMerge, colPath)
+		if i != colMerge && i != colVSCode {
+			t.Fatalf("colOverrides pins column %d, want only the dragged pair (%d, %d)", i, colMerge, colVSCode)
 		}
 	}
 
@@ -527,8 +531,8 @@ func TestViewMarksColumnBordersOnTheHeaderRowSoThereIsSomethingToDrag(t *testing
 	if headerLine == "" {
 		t.Fatalf("View() = %q, want a header line containing %q", m.View(), "Repo")
 	}
-	// 6 columns, so 5 internal borders.
-	if n := strings.Count(headerLine, loam.BorderGlyph); n != 5 {
-		t.Fatalf("header line has %d border glyphs, want 5 (one per internal column border): %q", n, headerLine)
+	// 7 columns, so 6 internal borders.
+	if n := strings.Count(headerLine, loam.BorderGlyph); n != 6 {
+		t.Fatalf("header line has %d border glyphs, want 6 (one per internal column border): %q", n, headerLine)
 	}
 }
