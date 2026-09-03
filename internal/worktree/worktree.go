@@ -32,10 +32,10 @@ import (
 // worktrees can legitimately take a few seconds.
 const defaultTimeout = 10 * time.Second
 
-// removeTimeout bounds one removal. `wt remove --foreground` runs the
-// repo's pre-remove hooks synchronously before returning, so this is far
-// more generous than defaultTimeout: hooks can legitimately take tens of
-// seconds.
+// removeTimeout bounds one removal. `wt remove` runs the repo's
+// pre-remove hooks synchronously before returning (in its default
+// background mode too), so this is far more generous than defaultTimeout:
+// hooks can legitimately take tens of seconds.
 const removeTimeout = 2 * time.Minute
 
 // maxConcurrentListCalls caps how many `wt list` subprocesses ListAll runs
@@ -483,12 +483,19 @@ func runRemoval(branch, bin string, args []string) error {
 // `-y` because the caller (understory's TUI) shows its own confirmation
 // prompt and wt's own is unreachable with captured output anyway: wt
 // treats the call as non-interactive and skips it entirely, the same
-// finding coppice documented for its own remove. `--foreground` so the
-// call only returns once removal (and its pre-remove hooks) actually
-// finished, making both the reported result and the list refresh that
-// follows it accurate.
+// finding coppice documented for its own remove. No `--foreground`:
+// wt's default background removal is still synchronous about everything
+// understory reports on — the worktree path is renamed away, the branch
+// deleted, the registration pruned, and a refusal (dirty worktree,
+// failed pre-remove hook) still comes back as a non-zero exit, all
+// before the command returns. Verified against wt v0.75: branch and
+// worktree path are both gone the moment `wt remove` exits. Only the
+// `rm -rf` of the already-renamed trash copy is detached, so the
+// physical delete trickles through a background process instead of one
+// concentrated foreground burst — the gentler filesystem-event profile
+// coppice's remove has always had.
 func removeArgs(entry Entry, opts RemoveOptions) []string {
-	args := []string{"-C", entry.RepoPath, "remove", entry.Branch, "-y", "--foreground"}
+	args := []string{"-C", entry.RepoPath, "remove", entry.Branch, "-y"}
 	if opts.Force {
 		args = append(args, "-f")
 	}

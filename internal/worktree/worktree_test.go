@@ -268,7 +268,7 @@ func TestListAllReturnsNilWhenWtIsNotOnPath(t *testing.T) {
 func TestRemoveArgsBuildsThePlainRemovalInvocation(t *testing.T) {
 	e := Entry{RepoPath: "/repo", Branch: "feat-x", Path: "/w/feat-x"}
 	got := removeArgs(e, RemoveOptions{})
-	want := []string{"-C", "/repo", "remove", "feat-x", "-y", "--foreground"}
+	want := []string{"-C", "/repo", "remove", "feat-x", "-y"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
@@ -277,7 +277,7 @@ func TestRemoveArgsBuildsThePlainRemovalInvocation(t *testing.T) {
 func TestRemoveArgsAppendsTheForceFlags(t *testing.T) {
 	e := Entry{RepoPath: "/repo", Branch: "feat-x", Path: "/w/feat-x"}
 	got := removeArgs(e, RemoveOptions{Force: true, ForceDelete: true})
-	want := []string{"-C", "/repo", "remove", "feat-x", "-y", "--foreground", "-f", "-D"}
+	want := []string{"-C", "/repo", "remove", "feat-x", "-y", "-f", "-D"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
