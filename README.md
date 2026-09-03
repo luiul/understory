@@ -141,7 +141,10 @@ ask for confirmation first (`y` confirms, `n`/`esc`/`enter` cancels, and
 an unanswered prompt cancels itself after 10 seconds, since rows keep
 repolling and reordering underneath it), then delegate to `wt remove`
 (`git worktree remove --force` for stale registrations), the same
-commands `cop remove` wraps:
+commands `cop remove` wraps. When the poll's VS Code snapshot reports a
+window currently open on a removal target, the prompt says so and asks
+you to close it first, since deleting a directory out from under an open
+window strands that window on a path that no longer exists:
 
 | Key | Action |
 |---|---|

@@ -167,10 +167,38 @@ func (m Model) confirmPrompt() string {
 		return fmt.Sprintf("Prune %d stale worktree %s? Their directories are already gone; this only drops the git registrations. [y/N]",
 			len(c.entries), plural(len(c.entries), "registration", "registrations"))
 	case confirmRemoveMerged:
-		return fmt.Sprintf("Remove %d merged %s of %s? Their branches will be deleted too. [y/N]",
-			len(c.entries), plural(len(c.entries), "worktree", "worktrees"), c.repo)
+		return fmt.Sprintf("Remove %d merged %s of %s? Their branches will be deleted too.%s [y/N]",
+			len(c.entries), plural(len(c.entries), "worktree", "worktrees"), c.repo, m.openWindowNote(c.entries))
 	}
 	return ""
+}
+
+// openWindowNote returns the removal prompts' caution about VS Code
+// windows currently open on the targets, or "" when the last poll
+// reported none. vscodeUnknown stays silent (a failed window listing
+// can't claim "not open", so the prompt never does either), the same
+// honesty rule the VS Code column follows. Removing a worktree whose
+// directory a window has open strands that window on a deleted folder,
+// and the watcher/extension churn that follows has once preceded a
+// Code-wide crash here; the prompt is the user's last chance to close
+// the window first.
+func (m Model) openWindowNote(entries []worktree.Entry) string {
+	n := 0
+	for _, e := range entries {
+		if m.vscode[e.Path] == vscodeOpen {
+			n++
+		}
+	}
+	if n == 0 {
+		return ""
+	}
+	if len(entries) == 1 {
+		return " Warning: a VS Code window has this worktree open; close it first, or it ends up stranded on a deleted folder."
+	}
+	if n == 1 {
+		return " Warning: 1 of them has a VS Code window open; close it first, or it ends up stranded on a deleted folder."
+	}
+	return fmt.Sprintf(" Warning: %d of them have a VS Code window open; close those first, or they end up stranded on deleted folders.", n)
 }
 
 func (m Model) singleRemovePrompt(e worktree.Entry, force bool) string {
@@ -182,8 +210,9 @@ func (m Model) singleRemovePrompt(e worktree.Entry, force bool) string {
 		// operation, one verb.
 		return fmt.Sprintf("Prune the stale registration for %s? The directory is already gone; this only prunes the git metadata. [y/N]", path)
 	}
+	note := m.openWindowNote([]worktree.Entry{e})
 	if force {
-		return fmt.Sprintf("Force remove worktree %s at %s? Uncommitted changes will be discarded and branch %s deleted even if unmerged. [y/N]", e.Branch, path, e.Branch)
+		return fmt.Sprintf("Force remove worktree %s at %s? Uncommitted changes will be discarded and branch %s deleted even if unmerged.%s [y/N]", e.Branch, path, e.Branch, note)
 	}
 	prompt := fmt.Sprintf("Remove worktree %s at %s?", e.Branch, path)
 	switch e.MergeStatus {
@@ -198,7 +227,7 @@ func (m Model) singleRemovePrompt(e worktree.Entry, force bool) string {
 	if e.Dirty {
 		prompt += " Warning: uncommitted changes, so wt will refuse (X force removes)."
 	}
-	return prompt + " [y/N]"
+	return prompt + note + " [y/N]"
 }
 
 func plural(n int, one, many string) string {

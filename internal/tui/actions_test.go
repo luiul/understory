@@ -436,6 +436,78 @@ func TestRemoveMergedTargetsOnlyTheSelectedReposMergedEntries(t *testing.T) {
 	}
 }
 
+func TestRemovePromptWarnsWhenAVSCodeWindowHasTheWorktreeOpen(t *testing.T) {
+	e := wtEntry("/w/a", "a", 0)
+	m := New(999, false)
+	m.applyWorktrees([]worktree.Entry{e})
+	m.vscode = map[string]vscodeState{"/w/a": vscodeOpen}
+
+	updated, _ := m.Update(key("x"))
+	m = updated.(Model)
+	if prompt := m.confirmPrompt(); !strings.Contains(prompt, "a VS Code window has this worktree open") {
+		t.Fatalf("prompt = %q, want the open-window warning", prompt)
+	}
+}
+
+func TestForceRemovePromptKeepsTheOpenWindowWarning(t *testing.T) {
+	e := wtEntry("/w/a", "a", 0)
+	m := New(999, false)
+	m.applyWorktrees([]worktree.Entry{e})
+	m.vscode = map[string]vscodeState{"/w/a": vscodeOpen}
+
+	updated, _ := m.Update(key("X"))
+	m = updated.(Model)
+	prompt := m.confirmPrompt()
+	if !strings.Contains(prompt, "Force remove") || !strings.Contains(prompt, "a VS Code window has this worktree open") {
+		t.Fatalf("prompt = %q, want the force wording plus the open-window warning", prompt)
+	}
+}
+
+func TestStalePromptSkipsTheOpenWindowWarning(t *testing.T) {
+	stale := wtEntry("/w/gone", "a", 0)
+	stale.Stale = true
+	m := New(999, false)
+	m.applyWorktrees([]worktree.Entry{stale})
+	m.vscode = map[string]vscodeState{"/w/gone": vscodeOpen}
+
+	updated, _ := m.Update(key("x"))
+	m = updated.(Model)
+	if prompt := m.confirmPrompt(); strings.Contains(prompt, "VS Code window") {
+		t.Fatalf("prompt = %q, want no window warning when the directory is already gone", prompt)
+	}
+}
+
+func TestRemovePromptStaysSilentWhenTheWindowListingIsUnknown(t *testing.T) {
+	e := wtEntry("/w/a", "a", 0)
+	m := New(999, false)
+	m.applyWorktrees([]worktree.Entry{e})
+	m.vscode = map[string]vscodeState{"/w/a": vscodeUnknown}
+
+	updated, _ := m.Update(key("x"))
+	m = updated.(Model)
+	if prompt := m.confirmPrompt(); strings.Contains(prompt, "VS Code window") {
+		t.Fatalf("prompt = %q, want no warning when the listing can't tell", prompt)
+	}
+}
+
+func TestRemoveMergedPromptCountsTheOpenWindows(t *testing.T) {
+	merged1 := wtEntry("/w/a", "merged-a", 0)
+	merged1.MergeStatus = worktree.MergeStatusMerged
+	merged2 := wtEntry("/w/b", "merged-b", time.Minute)
+	merged2.MergeStatus = worktree.MergeStatusMerged
+	m := New(999, false)
+	m.applyWorktrees([]worktree.Entry{merged1, merged2})
+	m.vscode = map[string]vscodeState{"/w/a": vscodeOpen, "/w/b": vscodeClosed}
+	m.table.SetCursor(0)
+
+	updated, _ := m.Update(key("M"))
+	m = updated.(Model)
+	prompt := m.confirmPrompt()
+	if !strings.Contains(prompt, "Remove 2 merged worktrees") || !strings.Contains(prompt, "1 of them has a VS Code window open") {
+		t.Fatalf("prompt = %q, want the batch wording plus the open-window count", prompt)
+	}
+}
+
 func TestRemoveMergedWithNoneMergedJustNotifies(t *testing.T) {
 	unmerged := wtEntry("/w/a", "a", 0)
 	unmerged.MergeStatus = worktree.MergeStatusUnmerged
