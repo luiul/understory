@@ -440,7 +440,7 @@ func TestRemovePromptWarnsWhenAVSCodeWindowHasTheWorktreeOpen(t *testing.T) {
 	e := wtEntry("/w/a", "a", 0)
 	m := New(999, false)
 	m.applyWorktrees([]worktree.Entry{e})
-	m.vscode = map[string]vscodeState{"/w/a": vscodeOpen}
+	m.vscodeStrict = map[string]bool{"/w/a": true}
 
 	updated, _ := m.Update(key("x"))
 	m = updated.(Model)
@@ -453,7 +453,7 @@ func TestForceRemovePromptKeepsTheOpenWindowWarning(t *testing.T) {
 	e := wtEntry("/w/a", "a", 0)
 	m := New(999, false)
 	m.applyWorktrees([]worktree.Entry{e})
-	m.vscode = map[string]vscodeState{"/w/a": vscodeOpen}
+	m.vscodeStrict = map[string]bool{"/w/a": true}
 
 	updated, _ := m.Update(key("X"))
 	m = updated.(Model)
@@ -468,7 +468,7 @@ func TestStalePromptSkipsTheOpenWindowWarning(t *testing.T) {
 	stale.Stale = true
 	m := New(999, false)
 	m.applyWorktrees([]worktree.Entry{stale})
-	m.vscode = map[string]vscodeState{"/w/gone": vscodeOpen}
+	m.vscodeStrict = map[string]bool{"/w/gone": true}
 
 	updated, _ := m.Update(key("x"))
 	m = updated.(Model)
@@ -481,7 +481,8 @@ func TestRemovePromptStaysSilentWhenTheWindowListingIsUnknown(t *testing.T) {
 	e := wtEntry("/w/a", "a", 0)
 	m := New(999, false)
 	m.applyWorktrees([]worktree.Entry{e})
-	m.vscode = map[string]vscodeState{"/w/a": vscodeUnknown}
+	// What a failed poll's vscodeStrictStates writes: nothing marked.
+	m.vscodeStrict = map[string]bool{"/w/a": false}
 
 	updated, _ := m.Update(key("x"))
 	m = updated.(Model)
@@ -497,7 +498,7 @@ func TestRemoveMergedPromptCountsTheOpenWindows(t *testing.T) {
 	merged2.MergeStatus = worktree.MergeStatusMerged
 	m := New(999, false)
 	m.applyWorktrees([]worktree.Entry{merged1, merged2})
-	m.vscode = map[string]vscodeState{"/w/a": vscodeOpen, "/w/b": vscodeClosed}
+	m.vscodeStrict = map[string]bool{"/w/a": true, "/w/b": false}
 	m.table.SetCursor(0)
 
 	updated, _ := m.Update(key("M"))

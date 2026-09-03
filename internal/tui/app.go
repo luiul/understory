@@ -98,6 +98,13 @@ type pollResultMsg struct {
 	// never renders one poll's worktrees against another poll's window
 	// listing.
 	vscode map[string]vscodeState
+	// vscodeStrict maps each polled worktree's path to the stricter
+	// "would deleting this worktree strand a window?" answer (see
+	// vscodeStates), for the remove prompts' open-window warning. Kept
+	// separate from vscode because the two answer different questions:
+	// the column's open-or-focus semantics tolerate a false open, the
+	// destructive warning does not.
+	vscodeStrict map[string]bool
 }
 type openResultMsg struct{ result mycelium.Result }
 type clearNotifyMsg struct{ token int }
@@ -119,6 +126,12 @@ type Model struct {
 	// vscodeUnknown ("?"), the honest answer before any listing has
 	// succeeded.
 	vscode map[string]vscodeState
+	// vscodeStrict is the last poll's per-path strict window answers
+	// (see pollResultMsg), read by the remove prompts' open-window
+	// warning (openWindowNote). Nil before the first poll lands; a nil
+	// map warns about nothing, the same "can't tell, stay silent" rule
+	// the column's vscodeUnknown follows.
+	vscodeStrict map[string]bool
 
 	table table.Model
 
@@ -201,7 +214,12 @@ func pollCmd() tea.Cmd {
 		// One window listing per poll, shared across every row's query
 		// (see mycelium.SnapshotVSCode): the listing is one osascript
 		// call, and git work-tree lookups are memoized across rows.
-		return pollResultMsg{worktrees: entries, vscode: vscodeStates(entries, snapshotVSCode())}
+		snap := snapshotVSCode()
+		return pollResultMsg{
+			worktrees:    entries,
+			vscode:       vscodeStates(entries, snap),
+			vscodeStrict: vscodeStrictStates(entries, snap),
+		}
 	}
 }
 
@@ -218,6 +236,7 @@ var openVSCode = mycelium.OpenVSCode
 type vscodeSnapshot interface {
 	Err() error
 	IsOpen(path, branch string) bool
+	IsOpenOnWorktree(path, branch string) bool
 }
 
 // snapshotVSCode is a package-level seam onto mycelium.SnapshotVSCode,
@@ -248,6 +267,26 @@ func vscodeStates(entries []worktree.Entry, snapshot vscodeSnapshot) map[string]
 		}
 	}
 	return states
+}
+
+// vscodeStrictStates maps each entry's path to the strict "would deleting
+// this worktree strand a window?" answer (mycelium's IsOpenOnWorktree),
+// for the remove prompts' open-window warning. The column above uses
+// IsOpen's open-or-focus semantics, where a false open merely renders a
+// dot; the destructive warning can't tolerate the branchless weak
+// fallback those semantics include (a bare-titled window of the same
+// repo would make every removal warn), so it gets its own map. A failed
+// listing (snapshot.Err) is "can't tell": everything false, the warning
+// stays silent rather than claiming anything.
+func vscodeStrictStates(entries []worktree.Entry, snapshot vscodeSnapshot) map[string]bool {
+	strict := make(map[string]bool, len(entries))
+	if snapshot.Err() != nil {
+		return strict
+	}
+	for _, e := range entries {
+		strict[e.Path] = snapshot.IsOpenOnWorktree(e.Path, e.Branch)
+	}
+	return strict
 }
 
 func openCmd(path, branch string) tea.Cmd {
@@ -405,6 +444,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case pollResultMsg:
 		m.vscode = msg.vscode
+		m.vscodeStrict = msg.vscodeStrict
 		m.applyWorktrees(msg.worktrees)
 		return m, nil
 

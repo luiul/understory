@@ -175,17 +175,22 @@ func (m Model) confirmPrompt() string {
 
 // openWindowNote returns the removal prompts' caution about VS Code
 // windows currently open on the targets, or "" when the last poll
-// reported none. vscodeUnknown stays silent (a failed window listing
-// can't claim "not open", so the prompt never does either), the same
-// honesty rule the VS Code column follows. Removing a worktree whose
-// directory a window has open strands that window on a deleted folder,
-// and the watcher/extension churn that follows has once preceded a
-// Code-wide crash here; the prompt is the user's last chance to close
-// the window first.
+// reported none. It reads the poll's STRICT window states (see
+// vscodeStrictStates), not the column's open-or-focus ones: the column
+// tolerates a false open (it just renders a dot), while a false open
+// here would cry wolf on a destructive prompt — the open-or-focus
+// match's branchless weak fallback would fire on every removal while any
+// bare-titled window of that repo is around. The honesty rule is the
+// same either way: a failed window listing yields no strict data, the
+// prompt never claims "not open", it just stays silent. Removing a
+// worktree whose directory a window has open strands that window on a
+// deleted folder, and the watcher/extension churn that follows has once
+// preceded a Code-wide crash here; the prompt is the user's last chance
+// to close the window first.
 func (m Model) openWindowNote(entries []worktree.Entry) string {
 	n := 0
 	for _, e := range entries {
-		if m.vscode[e.Path] == vscodeOpen {
+		if m.vscodeStrict[e.Path] {
 			n++
 		}
 	}

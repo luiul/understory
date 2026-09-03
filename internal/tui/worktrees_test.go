@@ -256,7 +256,7 @@ func TestBuildWorktreeRowsShowsWorktreeAndMergeColumns(t *testing.T) {
 type fakeVSCodeSnapshot struct {
 	open   map[string]bool
 	err    error
-	noCall bool // set when IsOpen must never be called (a failed listing)
+	noCall bool // set when IsOpen/IsOpenOnWorktree must never be called (a failed listing)
 }
 
 func (f fakeVSCodeSnapshot) Err() error { return f.err }
@@ -264,6 +264,16 @@ func (f fakeVSCodeSnapshot) Err() error { return f.err }
 func (f fakeVSCodeSnapshot) IsOpen(path, branch string) bool {
 	if f.noCall {
 		panic("IsOpen called on a failed listing; vscodeStates must not query it")
+	}
+	return f.open[path]
+}
+
+// IsOpenOnWorktree reuses the canned open set: the strict-vs-column
+// matching difference is mycelium's (and covered by its own suite); here
+// only the plumbing matters.
+func (f fakeVSCodeSnapshot) IsOpenOnWorktree(path, branch string) bool {
+	if f.noCall {
+		panic("IsOpenOnWorktree called on a failed listing; vscodeStrictStates must not query it")
 	}
 	return f.open[path]
 }
@@ -287,6 +297,28 @@ func TestVSCodeStatesReportsUnknownForAFailedListing(t *testing.T) {
 
 	if states["/w/a"] != vscodeUnknown {
 		t.Fatalf("got %v, want vscodeUnknown (a failed listing can't claim closed)", states["/w/a"])
+	}
+}
+
+func TestVSCodeStrictStatesMapsPerPath(t *testing.T) {
+	entries := []worktree.Entry{wtEntry("/w/a", "a", 0), wtEntry("/w/b", "b", 0)}
+	snapshot := fakeVSCodeSnapshot{open: map[string]bool{"/w/a": true}}
+
+	strict := vscodeStrictStates(entries, snapshot)
+
+	if !strict["/w/a"] || strict["/w/b"] {
+		t.Fatalf("got %v, want /w/a true and /w/b false", strict)
+	}
+}
+
+func TestVSCodeStrictStatesStaysSilentForAFailedListing(t *testing.T) {
+	entries := []worktree.Entry{wtEntry("/w/a", "a", 0)}
+	snapshot := fakeVSCodeSnapshot{err: errors.New("not authorized"), noCall: true}
+
+	strict := vscodeStrictStates(entries, snapshot)
+
+	if strict["/w/a"] {
+		t.Fatalf("got %v, want nothing marked (a failed listing can't claim anything)", strict)
 	}
 }
 

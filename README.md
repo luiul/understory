@@ -144,7 +144,13 @@ repolling and reordering underneath it), then delegate to `wt remove`
 commands `cop remove` wraps. When the poll's VS Code snapshot reports a
 window currently open on a removal target, the prompt says so and asks
 you to close it first, since deleting a directory out from under an open
-window strands that window on a path that no longer exists:
+window strands that window on a path that no longer exists. That check
+uses mycelium's strict window match (the title must name the worktree's
+folder and branch, or a window's focused file must live inside its
+tree), not the column's open-or-focus one: a false "open" on a
+destructive prompt would cry wolf, and the open-or-focus match's
+branchless fallback would fire on any bare-titled window of the same
+repo:
 
 | Key | Action |
 |---|---|
