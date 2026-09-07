@@ -91,8 +91,8 @@ table never overflows the terminal's right edge. Worktree/Merge are
 plain-word renderings of `wt`'s own compact status glyphs
 (dirty/ahead/behind), rather than the glyphs themselves. The VS Code
 column tells you whether a VS Code window is already open on the
-worktree (`open`, `-`, or `?` when the window listing itself couldn't
-be read): it answers with the exact same already-open check Enter's
+worktree (`open`, `-`, or `?` when the window registry couldn't be
+read): it answers with the exact same already-open check Enter's
 open-or-focus runs (see below), so `open` means Enter would focus that
 window rather than open a new one.
 
@@ -120,8 +120,10 @@ dragged keep their automatic sizing.
 Enter opens (or, if a window is already open on that path, focuses) a VS
 Code window there via [`github.com/luiul/dashkit/mycelium`](https://github.com/luiul/dashkit/tree/main/mycelium)'s
 shared open-or-focus logic: it checks for an already-open window itself
-first, via AppleScript against each window's title, and only forces a
-brand-new one (`-n`) once it knows none is already open. `code
+first, by exact folder path against the window registry
+(`~/.local/state/vscode-windows/`, written by dashkit's
+vscode-window-registry extension), and only forces a brand-new one
+(`-n`) once it knows none is already open. `code
 --reuse-window` alone turns out not to be enough for this, since it
 silently hijacks whichever window was last active instead of opening a
 fresh one whenever no window already has the given path open (confirmed

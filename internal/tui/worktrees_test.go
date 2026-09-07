@@ -250,9 +250,9 @@ func TestBuildWorktreeRowsShowsWorktreeAndMergeColumns(t *testing.T) {
 }
 
 // fakeVSCodeSnapshot implements the vscodeSnapshot seam with a canned
-// open set (or a listing error), so the column's poll-to-cell path is
-// testable without osascript; mycelium's own suite covers the matching
-// itself.
+// open set (or a read error), so the column's poll-to-cell path is
+// testable without the window registry; mycelium's own suite covers
+// the matching itself.
 type fakeVSCodeSnapshot struct {
 	open   map[string]bool
 	err    error
@@ -261,7 +261,7 @@ type fakeVSCodeSnapshot struct {
 
 func (f fakeVSCodeSnapshot) Err() error { return f.err }
 
-func (f fakeVSCodeSnapshot) IsOpen(path, branch string) bool {
+func (f fakeVSCodeSnapshot) IsOpen(path string) bool {
 	if f.noCall {
 		panic("IsOpen called on a failed listing; vscodeStates must not query it")
 	}
@@ -271,7 +271,7 @@ func (f fakeVSCodeSnapshot) IsOpen(path, branch string) bool {
 // IsOpenOnWorktree reuses the canned open set: the strict-vs-column
 // matching difference is mycelium's (and covered by its own suite); here
 // only the plumbing matters.
-func (f fakeVSCodeSnapshot) IsOpenOnWorktree(path, branch string) bool {
+func (f fakeVSCodeSnapshot) IsOpenOnWorktree(path string) bool {
 	if f.noCall {
 		panic("IsOpenOnWorktree called on a failed listing; vscodeStrictStates must not query it")
 	}

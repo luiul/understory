@@ -178,10 +178,8 @@ func (m Model) confirmPrompt() string {
 // reported none. It reads the poll's STRICT window states (see
 // vscodeStrictStates), not the column's open-or-focus ones: the column
 // tolerates a false open (it just renders a dot), while a false open
-// here would cry wolf on a destructive prompt — the open-or-focus
-// match's branchless weak fallback would fire on every removal while any
-// bare-titled window of that repo is around. The honesty rule is the
-// same either way: a failed window listing yields no strict data, the
+// here would cry wolf on a destructive prompt. The honesty rule is the
+// same either way: a failed registry read yields no strict data, the
 // prompt never claims "not open", it just stays silent. Removing a
 // worktree whose directory a window has open strands that window on a
 // deleted folder, and the watcher/extension churn that follows has once

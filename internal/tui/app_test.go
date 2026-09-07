@@ -38,15 +38,14 @@ func TestEnterCmdIsNilWhenNothingIsSelected(t *testing.T) {
 	}
 }
 
-func TestEnterCmdThreadsTheSelectedRowsPathAndBranchToMycelium(t *testing.T) {
-	// mycelium matches windows on rootName+branch together and can find a
-	// nested subpackage window by the branch in its title — but only if
-	// understory actually hands the branch over, not just the path.
+func TestEnterCmdThreadsTheSelectedRowsPathToMycelium(t *testing.T) {
+	// mycelium matches windows by exact folder path against the window
+	// registry — but only if understory actually hands the path over.
 	orig := openVSCode
 	t.Cleanup(func() { openVSCode = orig })
-	var gotPath, gotBranch string
-	openVSCode = func(path, branch string) mycelium.Result {
-		gotPath, gotBranch = path, branch
+	var gotPath string
+	openVSCode = func(path string) mycelium.Result {
+		gotPath = path
 		return mycelium.Result{OK: true, Message: "Focused VS Code window for " + path + "."}
 	}
 
@@ -63,8 +62,8 @@ func TestEnterCmdThreadsTheSelectedRowsPathAndBranchToMycelium(t *testing.T) {
 	if _, ok := msg.(openResultMsg); !ok {
 		t.Fatalf("got %T, want openResultMsg", msg)
 	}
-	if gotPath != "/w/tardis-community" || gotBranch != "patch/ISA-18409" {
-		t.Fatalf("got (%q, %q), want (%q, %q)", gotPath, gotBranch, "/w/tardis-community", "patch/ISA-18409")
+	if gotPath != "/w/tardis-community" {
+		t.Fatalf("got %q, want %q", gotPath, "/w/tardis-community")
 	}
 }
 

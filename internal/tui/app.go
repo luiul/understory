@@ -212,9 +212,8 @@ func pollCmd() tea.Cmd {
 	return func() tea.Msg {
 		entries := worktree.ListAll(worktree.KnownRepoPaths())
 		// One window snapshot per poll, shared across every row's query
-		// (see mycelium.SnapshotVSCode): a read of the window registry
-		// directory, or one osascript call when the registry cannot
-		// answer, and git work-tree lookups are memoized across rows.
+		// (see mycelium.SnapshotVSCode): one read of the window registry
+		// directory, and git work-tree lookups are memoized across rows.
 		snap := snapshotVSCode()
 		return pollResultMsg{
 			worktrees:    entries,
@@ -225,19 +224,20 @@ func pollCmd() tea.Cmd {
 }
 
 // openVSCode is a package-level seam onto mycelium.OpenVSCode, swapped
-// out in tests so app_test.go can verify the selected row's path and
-// branch are threaded through without shelling out to osascript or the
-// real `code` CLI; mycelium's own test suite covers the window-detection
-// logic itself in depth.
+// out in tests so app_test.go can verify the selected row's path is
+// threaded through without shelling out to the real `code` CLI;
+// mycelium's own test suite covers the window-detection logic itself
+// in depth.
 var openVSCode = mycelium.OpenVSCode
 
 // vscodeSnapshot is the slice of mycelium.VSCodeSnapshot a poll needs,
 // kept to an interface so tests can feed vscodeStates a fake without
-// osascript (see the fakeVSCodeSnapshot in worktrees_test.go).
+// touching the window registry (see the fakeVSCodeSnapshot in
+// worktrees_test.go).
 type vscodeSnapshot interface {
 	Err() error
-	IsOpen(path, branch string) bool
-	IsOpenOnWorktree(path, branch string) bool
+	IsOpen(path string) bool
+	IsOpenOnWorktree(path string) bool
 }
 
 // snapshotVSCode is a package-level seam onto mycelium.SnapshotVSCode,
@@ -245,13 +245,12 @@ type vscodeSnapshot interface {
 var snapshotVSCode = func() vscodeSnapshot { return mycelium.SnapshotVSCode() }
 
 // vscodeStates maps each entry's path to its VS Code window state for
-// this poll. A failed listing (snapshot.Err, most likely the macOS
-// Automation permission not granted yet) marks every row vscodeUnknown:
-// the snapshot can't tell open from closed, so the column renders "?"
-// rather than a wrong "-". Everything else defers to the snapshot's own
-// match cascade, which is Enter's open-or-focus one (see
-// mycelium.SnapshotVSCode): a row reads "open" exactly when Enter would
-// focus an existing window.
+// this poll. A failed registry read (snapshot.Err, the extension not
+// installed) marks every row vscodeUnknown: the snapshot can't tell
+// open from closed, so the column renders "?" rather than a wrong "-".
+// Everything else defers to the snapshot's own match, which is Enter's
+// open-or-focus one (see mycelium.SnapshotVSCode): a row reads "open"
+// exactly when Enter would focus an existing window.
 func vscodeStates(entries []worktree.Entry, snapshot vscodeSnapshot) map[string]vscodeState {
 	states := make(map[string]vscodeState, len(entries))
 	if snapshot.Err() != nil {
@@ -261,7 +260,7 @@ func vscodeStates(entries []worktree.Entry, snapshot vscodeSnapshot) map[string]
 		return states
 	}
 	for _, e := range entries {
-		if snapshot.IsOpen(e.Path, e.Branch) {
+		if snapshot.IsOpen(e.Path) {
 			states[e.Path] = vscodeOpen
 		} else {
 			states[e.Path] = vscodeClosed
@@ -274,25 +273,25 @@ func vscodeStates(entries []worktree.Entry, snapshot vscodeSnapshot) map[string]
 // this worktree strand a window?" answer (mycelium's IsOpenOnWorktree),
 // for the remove prompts' open-window warning. The column above uses
 // IsOpen's open-or-focus semantics, where a false open merely renders a
-// dot; the destructive warning can't tolerate the branchless weak
-// fallback those semantics include (a bare-titled window of the same
-// repo would make every removal warn), so it gets its own map. A failed
-// listing (snapshot.Err) is "can't tell": everything false, the warning
-// stays silent rather than claiming anything.
+// dot, while the destructive warning gets the strict match (a window
+// counts only when its folder is the worktree or inside it), so it gets
+// its own map. A failed registry read (snapshot.Err) is "can't tell":
+// everything false, the warning stays silent rather than claiming
+// anything.
 func vscodeStrictStates(entries []worktree.Entry, snapshot vscodeSnapshot) map[string]bool {
 	strict := make(map[string]bool, len(entries))
 	if snapshot.Err() != nil {
 		return strict
 	}
 	for _, e := range entries {
-		strict[e.Path] = snapshot.IsOpenOnWorktree(e.Path, e.Branch)
+		strict[e.Path] = snapshot.IsOpenOnWorktree(e.Path)
 	}
 	return strict
 }
 
-func openCmd(path, branch string) tea.Cmd {
+func openCmd(path string) tea.Cmd {
 	return func() tea.Msg {
-		return openResultMsg{result: openVSCode(path, branch)}
+		return openResultMsg{result: openVSCode(path)}
 	}
 }
 
@@ -490,15 +489,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // mycelium matches windows by exact folder path against the window
 // registry (every worktree of a repo shares the repo's leaf folder name,
 // but never its path), so same-named worktrees are distinguishable
-// outright. The row's branch is passed along as advisory input for the
-// title fallback, which runs only when the registry cannot answer — see
-// mycelium.OpenVSCode's own doc.
+// outright — see mycelium.OpenVSCode's own doc.
 func (m Model) enterCmd() tea.Cmd {
 	w, ok := m.selectedWorktree()
 	if !ok {
 		return nil
 	}
-	return openCmd(w.Path, w.Branch)
+	return openCmd(w.Path)
 }
 
 func clampInt(v, lo, hi int) int {
