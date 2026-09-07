@@ -211,9 +211,10 @@ func tickCmd(interval time.Duration) tea.Cmd {
 func pollCmd() tea.Cmd {
 	return func() tea.Msg {
 		entries := worktree.ListAll(worktree.KnownRepoPaths())
-		// One window listing per poll, shared across every row's query
-		// (see mycelium.SnapshotVSCode): the listing is one osascript
-		// call, and git work-tree lookups are memoized across rows.
+		// One window snapshot per poll, shared across every row's query
+		// (see mycelium.SnapshotVSCode): a read of the window registry
+		// directory, or one osascript call when the registry cannot
+		// answer, and git work-tree lookups are memoized across rows.
 		snap := snapshotVSCode()
 		return pollResultMsg{
 			worktrees:    entries,
@@ -485,12 +486,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// enterCmd opens or focuses a VS Code window on the selected row's path,
-// passing the row's branch along with it: mycelium matches windows on
-// rootName+branch together (every worktree of a repo shares the repo's
-// leaf folder name, so the basename alone can't tell two of them apart)
-// and can find a window open on a subpackage inside the worktree by the
-// branch in its title even when no file is focused there — see
+// enterCmd opens or focuses a VS Code window on the selected row's path.
+// mycelium matches windows by exact folder path against the window
+// registry (every worktree of a repo shares the repo's leaf folder name,
+// but never its path), so same-named worktrees are distinguishable
+// outright. The row's branch is passed along as advisory input for the
+// title fallback, which runs only when the registry cannot answer — see
 // mycelium.OpenVSCode's own doc.
 func (m Model) enterCmd() tea.Cmd {
 	w, ok := m.selectedWorktree()
