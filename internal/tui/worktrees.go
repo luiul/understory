@@ -66,9 +66,9 @@ const (
 
 // Column indexes into both worktreeColumns' return value and each
 // buildWorktreeRows row, in display order. colorizeRows (see colorize.go)
-// uses colWorktree/colMerge to recolor those two columns post-render;
-// the VS Code column renders in the default plain style, like
-// Created/Path. There's no dedicated cursor column: see loam.Sentinel's
+// uses colWorktree/colMerge to recolor those two columns post-render and
+// colBranch for the mismatch suffix's segment coloring; the VS Code
+// column renders in the default plain style, like Created/Path. There's no dedicated cursor column: see loam.Sentinel's
 // doc (loam pkg) for how the selected row is identified instead now that
 // the whole row is highlighted (colorize.go) rather than a leading
 // marker glyph.

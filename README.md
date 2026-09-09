@@ -92,7 +92,9 @@ when `wt` reports the worktree as a branch_worktree_mismatch: the
 directory was created for another branch (the `<segment>` in its path)
 and later `git switch`ed by hand, so the row is keyed by its checked-out
 branch while the path names a different one, and without the flag that
-branch would look like it has no worktree at all. Worktree/Merge are
+branch would look like it has no worktree at all. The suffix renders
+with a dim `@` and a magenta segment, the same colors coppice gives it,
+so it reads as context next to the plain branch name. Worktree/Merge are
 plain-word renderings of `wt`'s own compact status glyphs
 (dirty/ahead/behind), rather than the glyphs themselves. The VS Code
 column tells you whether a VS Code window is already open on the
