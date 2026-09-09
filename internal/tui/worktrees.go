@@ -421,9 +421,9 @@ type vscodeState int
 const (
 	// vscodeUnknown is the zero value on purpose: a worktree missing
 	// from the poll's map (or a poll whose window listing failed, most
-	// likely because the macOS Automation permission hasn't been
-	// granted yet) renders "?" — the listing can't claim "not open",
-	// so the cell never does either.
+	// likely because the vscode-window-registry extension isn't
+	// installed or its directory is unreadable) renders "?" — the
+	// listing can't claim "not open", so the cell never does either.
 	vscodeUnknown vscodeState = iota
 	vscodeClosed              // checked, no window open on this worktree
 	vscodeOpen                // a window is open on this worktree
