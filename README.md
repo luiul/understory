@@ -87,7 +87,12 @@ than a fixed width, so a long name is never truncated as long as the
 terminal has room for everything; on one that doesn't, Repo/Branch shed
 that growth first (longest-first, so truncation hits the longest values
 first) and only then does Path dip below its own preferred width — the
-table never overflows the terminal's right edge. Worktree/Merge are
+table never overflows the terminal's right edge. Branch appends ` @ <segment>/`
+when `wt` reports the worktree as a branch_worktree_mismatch: the
+directory was created for another branch (the `<segment>` in its path)
+and later `git switch`ed by hand, so the row is keyed by its checked-out
+branch while the path names a different one, and without the flag that
+branch would look like it has no worktree at all. Worktree/Merge are
 plain-word renderings of `wt`'s own compact status glyphs
 (dirty/ahead/behind), rather than the glyphs themselves. The VS Code
 column tells you whether a VS Code window is already open on the

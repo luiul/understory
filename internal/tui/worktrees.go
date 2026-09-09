@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -98,14 +99,31 @@ func repoColumnWidth(worktrees []worktree.Entry) int {
 	return width
 }
 
+// branchLabel is the Branch column's cell text for one worktree: the
+// branch name, plus the path's branch segment for a Mismatch row (a
+// worktree sitting at another branch's path, e.g. its directory was
+// created for that branch and later `git switch`ed by hand). Without the
+// segment, a scan for the path's own branch finds no row: the worktree
+// is keyed by its checked-out branch, and the branch the path names
+// looks like it has no worktree at all. The trailing slash marks the
+// segment as a directory name, not a second branch.
+func branchLabel(w worktree.Entry) string {
+	if !w.Mismatch || w.Path == "" {
+		return w.Branch
+	}
+	return fmt.Sprintf("%s @ %s/", w.Branch, filepath.Base(filepath.Dir(w.Path)))
+}
+
 // branchColumnWidth is the Branch column's width for the given worktree
-// set: branchColWidth's floor, or the longest branch name's own display
+// set: branchColWidth's floor, or the longest branch label's own display
 // width if that's wider (same reasoning as repoColumnWidth: a fixed
 // width truncated long branch names instead of showing them in full).
+// Measured on branchLabel, not the raw branch name, so a mismatch row's
+// ' @ <segment>/' suffix is funded too rather than truncated away.
 func branchColumnWidth(worktrees []worktree.Entry) int {
 	width := branchColWidth
 	for _, w := range worktrees {
-		if lw := runewidth.StringWidth(w.Branch); lw > width {
+		if lw := runewidth.StringWidth(branchLabel(w)); lw > width {
 			width = lw
 		}
 	}
@@ -474,7 +492,7 @@ func buildWorktreeRows(worktrees []worktree.Entry, cursor int, home string, now 
 		}
 		rows[i] = table.Row{
 			label,
-			w.Branch,
+			branchLabel(w),
 			created,
 			worktreeStatusLabel(w),
 			mergeStatusLabel(w),

@@ -140,6 +140,31 @@ func TestParseListOutputMarksAPrunableWorktreeStale(t *testing.T) {
 	}
 }
 
+func TestParseListOutputMarksABranchWorktreeMismatch(t *testing.T) {
+	raw := []byte(`[{"branch": "feature/other", "path": "/w/review-jamie/repo", "commit": {"timestamp": 0}, "working_tree": {}, "repo": {}, "worktree": {"state": "branch_worktree_mismatch"}}]`)
+	entries, err := parseListOutput(raw)
+	if err != nil {
+		t.Fatalf("got err %v", err)
+	}
+	if len(entries) != 1 || !entries[0].Mismatch {
+		t.Fatalf("got %+v, want Mismatch=true for a branch_worktree_mismatch worktree", entries)
+	}
+	if entries[0].Stale {
+		t.Fatalf("got %+v, want Stale=false: a mismatch is not a removal candidate", entries)
+	}
+}
+
+func TestParseListOutputRightfulPathIsNotAMismatch(t *testing.T) {
+	raw := []byte(`[{"branch": "b", "path": "/p", "commit": {"timestamp": 0}, "working_tree": {}, "repo": {}, "worktree": {"state": "active"}}]`)
+	entries, err := parseListOutput(raw)
+	if err != nil {
+		t.Fatalf("got err %v", err)
+	}
+	if len(entries) != 1 || entries[0].Mismatch {
+		t.Fatalf("got %+v, want Mismatch=false for an ordinary worktree", entries)
+	}
+}
+
 func TestParseListOutputNonPrunableWorktreeIsNotStale(t *testing.T) {
 	raw := []byte(`[{"branch": "b", "path": "/p", "commit": {"timestamp": 0}, "working_tree": {}, "repo": {}, "worktree": {"state": "branch_worktree_mismatch"}}]`)
 	entries, err := parseListOutput(raw)

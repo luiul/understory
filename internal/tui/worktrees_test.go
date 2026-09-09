@@ -249,6 +249,37 @@ func TestBuildWorktreeRowsShowsWorktreeAndMergeColumns(t *testing.T) {
 	}
 }
 
+func TestBranchLabelNamesThePathsBranchSegmentForAMismatch(t *testing.T) {
+	w := wtEntry("/w/review-jamie/widgets", "feature/other", 0)
+	w.Mismatch = true
+	if got, want := branchLabel(w), "feature/other @ review-jamie/"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestBranchLabelIsThePlainBranchForARightfulPath(t *testing.T) {
+	if got, want := branchLabel(wtEntry("/w/a/widgets", "a", 0)), "a"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestBranchColumnWidthFundsTheMismatchSuffix(t *testing.T) {
+	w := wtEntry("/w/review-jamie/widgets", "feature/other", 0)
+	w.Mismatch = true
+	if got, want := branchColumnWidth([]worktree.Entry{w}), runewidth.StringWidth(branchLabel(w)); got < want {
+		t.Fatalf("got width %d, want at least %d so the ' @ <segment>/' suffix isn't truncated away", got, want)
+	}
+}
+
+func TestBuildWorktreeRowsShowsTheMismatchSuffixInTheBranchCell(t *testing.T) {
+	w := wtEntry("/w/review-jamie/widgets", "feature/other", 0)
+	w.Mismatch = true
+	rows := buildWorktreeRows([]worktree.Entry{w}, 0, "", time.Now(), nil)
+	if got, want := rows[0][colBranch], "feature/other @ review-jamie/"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
 // fakeVSCodeSnapshot implements the vscodeSnapshot seam with a canned
 // open set (or a read error), so the column's poll-to-cell path is
 // testable without the window registry; mycelium's own suite covers

@@ -97,6 +97,13 @@ type Entry struct {
 	// reaped, ...). Nothing else about it (Dirty, MergeStatus, Path) is
 	// meaningful once that's true; it's purely a removal candidate.
 	Stale bool
+	// Mismatch is true when `wt` reports this worktree's state as
+	// "branch_worktree_mismatch": the directory was created for a
+	// different branch and later `git switch`ed by hand, so the row is
+	// keyed by its checked-out branch while its path names another
+	// branch's. Without surfacing that, the path's own branch looks like
+	// it has no worktree at all, and its expected path looks 'missing'.
+	Mismatch bool
 	// MergeStatus is this branch's relationship to the repo's main branch,
 	// a triage answer to "what does this worktree need?" derived from
 	// `wt`'s own main_state (which `wt` resolves via git, simulating the
@@ -218,10 +225,10 @@ type rawEntry struct {
 		Owner string `json:"owner"`
 		Name  string `json:"name"`
 	} `json:"repo"`
-	// Worktree.State surfaces `wt`'s own "prunable" designation (see
-	// Entry.Stale); every other worktree state it might report (e.g.
-	// "branch_worktree_mismatch", seen on a detached/mismatched checkout)
-	// is intentionally left unparsed, understory has no use for it yet.
+	// Worktree.State surfaces `wt`'s own "prunable" (see Entry.Stale) and
+	// "branch_worktree_mismatch" (see Entry.Mismatch) designations; every
+	// other worktree state it might report is intentionally left unparsed,
+	// understory has no use for it yet.
 	Worktree struct {
 		State string `json:"state"`
 	} `json:"worktree"`
@@ -327,6 +334,7 @@ func parseListOutput(out []byte) ([]Entry, error) {
 	for i, r := range raw {
 		wt := r.WorkingTree
 		stale := r.Worktree.State == "prunable"
+		mismatch := r.Worktree.State == "branch_worktree_mismatch"
 		entries[i] = Entry{
 			Owner:       r.Repo.Owner,
 			Repo:        r.Repo.Name,
@@ -338,6 +346,7 @@ func parseListOutput(out []byte) ([]Entry, error) {
 			CommitTime:  time.Unix(r.Commit.Timestamp, 0),
 			Dirty:       wt.Staged || wt.Modified || wt.Untracked || wt.Renamed || wt.Deleted,
 			Stale:       stale,
+			Mismatch:    mismatch,
 			MergeStatus: mergeStatus(r.IsMain, stale, r.MainState),
 			Symbols:     r.Symbols,
 		}
