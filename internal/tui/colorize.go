@@ -21,6 +21,11 @@ var worktreeStatusStyles = map[string]lipgloss.Style{
 	"dirty": lipgloss.NewStyle().Foreground(lipgloss.Color("11")),           // uncommitted changes: worth a look
 	"stale": lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("9")), // directory's gone: a removal candidate
 	"clean": lipgloss.NewStyle().Foreground(lipgloss.Color("240")),          // nothing to do here
+	// task-complete and set aside for follow-up: the dimmest word in the
+	// column, since coppice dims a parked row as a whole and a single
+	// cell is all understory styles (see worktreeStatusLabel for why the
+	// word wins over dirty/clean).
+	"parked": lipgloss.NewStyle().Faint(true),
 }
 
 var mergeStatusStyles = map[string]lipgloss.Style{

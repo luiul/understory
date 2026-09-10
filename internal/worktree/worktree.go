@@ -19,9 +19,11 @@ package worktree
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -130,6 +132,13 @@ type Entry struct {
 	// and a branch worktree (vs. its main branch), and wt already resolved
 	// that correctly.
 	Symbols string
+	// ParkedAt is the branch's parked mark (coppice's `cop park`: a
+	// `branch.<branch>.parked-at` unix timestamp in the repo's shared
+	// local git config), folded in from that config by ListWorktrees (see
+	// applyParked). Zero when the branch carries no mark. The mark means
+	// "nothing new since I marked it": a task-complete worktree kept on
+	// disk for follow-up.
+	ParkedAt time.Time
 	// RepoPath is the filesystem root of the repo this entry was listed
 	// from (the path ListWorktrees queried with `wt -C`). Removal needs
 	// it: neither Branch nor Path alone identifies the owning repo to
@@ -268,6 +277,7 @@ func ListWorktrees(repoPath string) ([]Entry, error) {
 	}
 	applyRepoFallback(entries, repoPath)
 	applyCreatedTime(entries)
+	applyParked(entries, repoPath)
 	return entries, nil
 }
 
@@ -352,6 +362,67 @@ func parseListOutput(out []byte) ([]Entry, error) {
 		}
 	}
 	return entries, nil
+}
+
+// Parked reports whether the entry counts as parked right now: marked
+// (see Entry.ParkedAt), with no follow-up since. A head commit newer
+// than the mark means follow-up already happened, so the worktree reads
+// as active again with no mark cleanup needed, the same read-time rule
+// coppice's own _effectively_parked applies.
+func (e Entry) Parked() bool {
+	if e.ParkedAt.IsZero() {
+		return false
+	}
+	return e.CommitTime.IsZero() || !e.CommitTime.After(e.ParkedAt)
+}
+
+// parkedMarks returns every parked branch's mark ({branch: parked-at}) in
+// the repo at repoPath, from one `git config --get-regexp` call, the same
+// read coppice's park.parked_at does. A non-zero exit (nothing parked, or
+// not a repo at all) just means "no marks", not an error. Values are
+// split off the line's END (key, last-space, value) so nothing about the
+// key's own shape can shift the split, mirroring park.py.
+func parkedMarks(repoPath string) map[string]time.Time {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "git", "-C", repoPath, "config", "--get-regexp", `^branch\..*\.parked-at$`).Output()
+	if err != nil {
+		return nil
+	}
+	marks := map[string]time.Time{}
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		i := strings.LastIndex(line, " ")
+		if i < 0 {
+			continue
+		}
+		key, value := line[:i], strings.TrimSpace(line[i+1:])
+		if !strings.HasPrefix(key, "branch.") || !strings.HasSuffix(key, ".parked-at") {
+			continue
+		}
+		ts, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			continue
+		}
+		marks[key[len("branch."):len(key)-len(".parked-at")]] = time.Unix(int64(ts), 0)
+	}
+	return marks
+}
+
+// applyParked folds repoPath's parked marks (see parkedMarks) into
+// entries by branch name, mutating entries in place. Runs once per
+// ListWorktrees call, one extra git subprocess per repo per poll, the
+// same cost profile coppice's parked_at_many accepts.
+func applyParked(entries []Entry, repoPath string) {
+	marks := parkedMarks(repoPath)
+	if len(marks) == 0 {
+		return
+	}
+	for i := range entries {
+		if ts, ok := marks[entries[i].Branch]; ok {
+			entries[i].ParkedAt = ts
+		}
+	}
 }
 
 // mergeStatus derives Entry.MergeStatus from `wt`'s own reporting: see
@@ -512,6 +583,60 @@ func removeArgs(entry Entry, opts RemoveOptions) []string {
 		args = append(args, "-D")
 	}
 	return args
+}
+
+// ParkError is a failed Park/Unpark: the git command's exit error plus
+// its trimmed combined output, the same "the command's own message leads"
+// pattern as RemoveError.
+type ParkError struct {
+	Branch string
+	Output string
+	Err    error
+}
+
+func (e *ParkError) Error() string {
+	if e.Output != "" {
+		return e.Output
+	}
+	return e.Err.Error()
+}
+
+func (e *ParkError) Unwrap() error { return e.Err }
+
+// Park marks entry's branch parked as of now: the write side of coppice's
+// `cop park`, one `branch.<branch>.parked-at <unix-ts>` key in the repo's
+// shared local git config (readable from the main checkout and every
+// linked worktree alike). Re-parking an already-parked branch just
+// refreshes the mark.
+func Park(entry Entry) error {
+	return runPark(entry.Branch, "-C", entry.RepoPath, "config",
+		"branch."+entry.Branch+".parked-at", strconv.FormatInt(time.Now().Unix(), 10))
+}
+
+// Unpark deletes entry's branch's parked mark. A missing key is not an
+// error (git exits 5 for it): unparking something never parked is a
+// no-op, same as coppice's park.unpark.
+func Unpark(entry Entry) error {
+	err := runPark(entry.Branch, "-C", entry.RepoPath, "config",
+		"--unset", "branch."+entry.Branch+".parked-at")
+	var parkErr *ParkError
+	if errors.As(err, &parkErr) {
+		var exitErr *exec.ExitError
+		if errors.As(parkErr.Err, &exitErr) && exitErr.ExitCode() == 5 {
+			return nil
+		}
+	}
+	return err
+}
+
+func runPark(branch string, args ...string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "git", args...).CombinedOutput()
+	if err != nil {
+		return &ParkError{Branch: branch, Output: strings.TrimSpace(string(out)), Err: err}
+	}
+	return nil
 }
 
 // pruneStaleArgs builds the git invocation that drops a stale (prunable)

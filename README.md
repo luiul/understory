@@ -7,9 +7,10 @@ with open-or-focus-a-VS-Code-window on Enter and confirmed removal on
 
 understory is the always-on counterpart to `wt`/coppice, which do the
 actual worktree work; see [Ecosystem](#ecosystem) below for how
-all the pieces fit together. It stays read-only except for one triage
-action: removing worktrees, delegated to `wt remove` with a
-confirmation prompt (see [Actions](#actions) below).
+all the pieces fit together. It stays read-only except for two triage
+actions: removing worktrees, delegated to `wt remove` with a
+confirmation prompt, and parking/unparking them, one git config key per
+branch (see [Actions](#actions) below).
 
 ## Ecosystem
 
@@ -96,7 +97,13 @@ branch would look like it has no worktree at all. The suffix renders
 with a dim `@` and a magenta segment, the same colors coppice gives it,
 so it reads as context next to the plain branch name. Worktree/Merge are
 plain-word renderings of `wt`'s own compact status glyphs
-(dirty/ahead/behind), rather than the glyphs themselves. The VS Code
+(dirty/ahead/behind), rather than the glyphs themselves. Worktree also
+shows `parked` (dimmed) when the branch carries coppice's parked mark
+(`cop park`, a `branch.<branch>.parked-at` git config timestamp) and no
+commit has landed since: task complete, kept on disk for follow-up. A
+newer head commit flips the row back to active on its own, the same
+read-time rule `cop list` applies, so a stale mark never needs cleaning
+up. The VS Code
 column tells you whether a VS Code window is already open on the
 worktree (`open`, `-`, or `?` when the window registry couldn't be
 read): it answers with the exact same already-open check Enter's
@@ -145,7 +152,13 @@ being duplicated across both tools.
 
 ## Actions
 
-Everything other than removal is read-only. The removal keybindings all
+Everything other than removal and parking is read-only. Parking (`p`) is
+the non-destructive one: it sets or deletes the branch's parked mark
+(coppice's `branch.<branch>.parked-at` git config timestamp), nothing
+else, so it never asks unless the worktree has uncommitted changes
+(parking marks a worktree task-complete, and dirty and complete
+contradict each other, the same question `cop park` asks). Pressing `p`
+on a parked row unparks it. The removal keybindings all
 ask for confirmation first (`y` confirms, `n`/`esc`/`enter` cancels, and
 an unanswered prompt cancels itself after 10 seconds, since rows keep
 repolling and reordering underneath it), then delegate to `wt remove`
@@ -165,6 +178,7 @@ wolf.
 | `X` | Force remove: discards uncommitted changes and deletes the branch even if unmerged. |
 | `P` | Prune every stale worktree registration (directories already gone; drops only the git metadata). |
 | `M` | Remove every merged worktree of the selected row's repo, branches included. |
+| `p` | Park the selected worktree (task complete, kept for follow-up), or unpark a parked one. Parking a dirty one asks first. |
 | `y` | Copy the selected worktree's full path to the clipboard (vim's yank). |
 | `m` | Show or hide each repo's main worktree (same as `--show-main`, at runtime). |
 | `?` | Full keybinding list. |
@@ -173,7 +187,7 @@ wolf.
 
 understory and canopy share one set of keybinding conventions, so muscle
 memory transfers between the two dashboards: lowercase keys act on the
-selected row or are reversible (`x`, `y`, `m`), uppercase keys are the
+selected row or are reversible (`x`, `p`, `y`, `m`), uppercase keys are the
 bulk or stronger form (`X`, `P`, `M`), every destructive action asks for
 confirmation first, and `ctrl+c` always quits: from the table, from a
 confirmation prompt, from the help overlay. The full set of shared

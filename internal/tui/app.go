@@ -401,6 +401,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "M":
 			cmd := m.startConfirm(confirmRemoveMerged)
 			return m, cmd
+		case "p":
+			return m, m.parkOrUnparkCmd()
 		case "y":
 			// Copy is y, vim's yank: c collided with canopy's dismiss
 			// binding, and one key meaning two different things across
@@ -463,6 +465,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, cmd
+
+	case parkResultMsg:
+		if msg.err != nil {
+			return m, m.notify(firstLine(msg.err.Error()), true)
+		}
+		text := "parked " + msg.entry.Branch
+		if msg.unparked {
+			text = "unparked " + msg.entry.Branch
+		}
+		// Refresh right away so the row's parked rendering changes now
+		// instead of on the next tick (up to interval away).
+		return m, tea.Batch(m.notify(text, false), pollCmd())
 
 	case copyResultMsg:
 		if msg.err != nil {
@@ -579,6 +593,7 @@ var helpBindings = []loam.HelpBinding{
 	{Key: "X", Desc: "force remove: discard uncommitted changes, delete the branch even if unmerged"},
 	{Key: "P", Desc: "prune every stale worktree registration (asks first)"},
 	{Key: "M", Desc: "remove every merged worktree of the selected repo (asks first)"},
+	{Key: "p", Desc: "park the selected worktree (task complete, kept for follow-up), or unpark a parked one; parking a dirty one asks first"},
 	{Key: "y", Desc: "copy the worktree path to the clipboard"},
 	{Key: "m", Desc: "show or hide each repo's main worktree"},
 	{Key: "r", Desc: "refresh now"},
@@ -617,7 +632,7 @@ func (m Model) footerView() string {
 	if m.helpOpen {
 		return subtleStyle.Render("press any key to close")
 	}
-	return subtleStyle.Render("↑/↓ move · enter open/focus · x remove · ? help · q quit")
+	return subtleStyle.Render("↑/↓ move · enter open/focus · p park · x remove · ? help · q quit")
 }
 
 // View implements tea.Model.

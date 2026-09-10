@@ -707,3 +707,222 @@ func TestMouseDragIsIgnoredWhileAPromptIsOpen(t *testing.T) {
 		t.Fatalf("Merge width = %d, want unchanged %d while the prompt is open", got, cols[colMerge].Width)
 	}
 }
+
+// --- park/unpark (p) ------------------------------------------------------
+
+// stubPark swaps the parkWorktree/unparkWorktree seams for recording
+// fakes, same pattern as stubRemove.
+func stubPark(t *testing.T) (parked, unparked *[]worktree.Entry) {
+	t.Helper()
+	origPark, origUnpark := parkWorktree, unparkWorktree
+	t.Cleanup(func() { parkWorktree, unparkWorktree = origPark, origUnpark })
+	parked = &[]worktree.Entry{}
+	unparked = &[]worktree.Entry{}
+	parkWorktree = func(e worktree.Entry) error {
+		*parked = append(*parked, e)
+		return nil
+	}
+	unparkWorktree = func(e worktree.Entry) error {
+		*unparked = append(*unparked, e)
+		return nil
+	}
+	return parked, unparked
+}
+
+// parkedEntry is a clean, effectively-parked worktree (the mark is newer
+// than the head commit, so no follow-up has arrived).
+func parkedEntry(path, branch string) worktree.Entry {
+	e := wtEntry(path, branch, time.Hour)
+	e.ParkedAt = time.Now()
+	return e
+}
+
+func TestPParksACleanRowWithoutAsking(t *testing.T) {
+	parked, _ := stubPark(t)
+	m := New(999, false)
+	m.applyWorktrees([]worktree.Entry{wtEntry("/w/a", "a", 0)})
+
+	updated, cmd := m.Update(key("p"))
+	m = updated.(Model)
+
+	if m.confirm.Active() {
+		t.Fatal("a clean worktree parks without a prompt")
+	}
+	if cmd == nil {
+		t.Fatal("want a park command")
+	}
+	msg := cmd()
+	res, ok := msg.(parkResultMsg)
+	if !ok {
+		t.Fatalf("got %T, want parkResultMsg", msg)
+	}
+	if res.err != nil || res.unparked || res.entry.Branch != "a" {
+		t.Fatalf("got %+v, want a successful park of a", res)
+	}
+	if len(*parked) != 1 || (*parked)[0].Path != "/w/a" {
+		t.Fatalf("parked %+v, want the selected entry", *parked)
+	}
+
+	updated, cmd = m.Update(msg)
+	m = updated.(Model)
+	if m.notification != "parked a" || m.notifyIsError {
+		t.Fatalf("got notification %q (err=%v), want 'parked a'", m.notification, m.notifyIsError)
+	}
+	if cmd == nil {
+		t.Fatal("want the post-park refresh scheduled")
+	}
+}
+
+func TestPUnparksAParkedRowWithoutAsking(t *testing.T) {
+	_, unparked := stubPark(t)
+	m := New(999, false)
+	m.applyWorktrees([]worktree.Entry{parkedEntry("/w/a", "a")})
+
+	updated, cmd := m.Update(key("p"))
+	m = updated.(Model)
+
+	if m.confirm.Active() {
+		t.Fatal("unparking destroys nothing: no prompt")
+	}
+	if cmd == nil {
+		t.Fatal("want an unpark command")
+	}
+	msg := cmd()
+	res := msg.(parkResultMsg)
+	if res.err != nil || !res.unparked {
+		t.Fatalf("got %+v, want a successful unpark", res)
+	}
+	if len(*unparked) != 1 || (*unparked)[0].Path != "/w/a" {
+		t.Fatalf("unparked %+v, want the selected entry", *unparked)
+	}
+
+	updated, _ = m.Update(msg)
+	m = updated.(Model)
+	if m.notification != "unparked a" || m.notifyIsError {
+		t.Fatalf("got notification %q (err=%v), want 'unparked a'", m.notification, m.notifyIsError)
+	}
+}
+
+func TestPOnADirtyRowAsksFirst(t *testing.T) {
+	parked, _ := stubPark(t)
+	dirty := wtEntry("/w/a", "a", 0)
+	dirty.Dirty = true
+	m := New(999, false)
+	m.home = ""
+	m.applyWorktrees([]worktree.Entry{dirty})
+
+	updated, _ := m.Update(key("p"))
+	m = updated.(Model)
+
+	if !m.confirm.Active() {
+		t.Fatal("dirty and complete contradict each other: want a prompt")
+	}
+	if m.confirm.Payload.kind != confirmParkOne {
+		t.Fatalf("got kind %v, want confirmParkOne", m.confirm.Payload.kind)
+	}
+	if !strings.Contains(m.footerView(), "Park a at /w/a?") {
+		t.Fatalf("footer = %q, want the park prompt", m.footerView())
+	}
+
+	updated, cmd := m.Update(key("y"))
+	m = updated.(Model)
+	if m.confirm.Active() {
+		t.Fatal("want the prompt closed after y")
+	}
+	if cmd == nil {
+		t.Fatal("want a park command after y")
+	}
+	cmd()
+	if len(*parked) != 1 || (*parked)[0].Path != "/w/a" {
+		t.Fatalf("parked %+v, want the selected entry", *parked)
+	}
+}
+
+func TestPOnADirtyRowCancelledParksNothing(t *testing.T) {
+	parked, _ := stubPark(t)
+	dirty := wtEntry("/w/a", "a", 0)
+	dirty.Dirty = true
+	m := New(999, false)
+	m.applyWorktrees([]worktree.Entry{dirty})
+
+	updated, _ := m.Update(key("p"))
+	m = updated.(Model)
+	updated, cmd := m.Update(key("n"))
+	m = updated.(Model)
+
+	if m.confirm.Active() || cmd != nil {
+		t.Fatal("want the prompt cancelled and nothing dispatched")
+	}
+	if len(*parked) != 0 {
+		t.Fatalf("parked %+v, want nothing parked", *parked)
+	}
+}
+
+func TestPOnTheMainWorktreeIsRefused(t *testing.T) {
+	parked, _ := stubPark(t)
+	main := wtEntry("/w/main", "main", 0)
+	main.IsMain = true
+	m := New(999, true) // showMain, so the row exists at all
+	m.applyWorktrees([]worktree.Entry{main})
+
+	updated, cmd := m.Update(key("p"))
+	m = updated.(Model)
+
+	if m.confirm.Active() || len(*parked) != 0 {
+		t.Fatal("want no prompt and no park for the main worktree")
+	}
+	if !m.notifyIsError || !strings.Contains(m.notification, "main worktree") {
+		t.Fatalf("got notification %q (err=%v), want the main-worktree refusal", m.notification, m.notifyIsError)
+	}
+	if cmd == nil {
+		t.Fatal("want the notification's clear scheduled")
+	}
+}
+
+func TestPOnAStaleRowIsRefused(t *testing.T) {
+	parked, _ := stubPark(t)
+	stale := wtEntry("/w/gone", "gone", 0)
+	stale.Stale = true
+	m := New(999, false)
+	m.applyWorktrees([]worktree.Entry{stale})
+
+	updated, cmd := m.Update(key("p"))
+	m = updated.(Model)
+
+	if m.confirm.Active() || len(*parked) != 0 {
+		t.Fatal("a stale registration's directory is already gone: nothing to park")
+	}
+	if !m.notifyIsError || !strings.Contains(m.notification, "stale") {
+		t.Fatalf("got notification %q (err=%v), want the stale refusal", m.notification, m.notifyIsError)
+	}
+	if cmd == nil {
+		t.Fatal("want the notification's clear scheduled")
+	}
+}
+
+func TestPOnNothingSelectedDoesNothing(t *testing.T) {
+	m := New(999, false)
+	updated, cmd := m.Update(key("p"))
+	m = updated.(Model)
+	if m.confirm.Active() || cmd != nil {
+		t.Fatal("want no prompt and no command when nothing is selected")
+	}
+}
+
+func TestParkFailureNotifiesAsAnError(t *testing.T) {
+	m := New(999, false)
+	m.applyWorktrees([]worktree.Entry{wtEntry("/w/a", "a", 0)})
+
+	updated, cmd := m.Update(parkResultMsg{
+		entry: wtEntry("/w/a", "a", 0),
+		err:   &worktree.ParkError{Branch: "a", Output: "fatal: not in a git directory", Err: errors.New("exit status 128")},
+	})
+	m = updated.(Model)
+
+	if !m.notifyIsError || !strings.Contains(m.notification, "fatal: not in a git directory") {
+		t.Fatalf("got notification %q (err=%v), want the command's own message as an error", m.notification, m.notifyIsError)
+	}
+	if cmd == nil {
+		t.Fatal("want the notification's clear scheduled")
+	}
+}

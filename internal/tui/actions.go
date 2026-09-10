@@ -1,10 +1,10 @@
 // Keybinding-driven actions on worktrees: the confirmation modal behind
-// x/X/P/M (its state machine — answers, auto-cancel timeout, poll
-// revalidation — is dashkit's confirm package, shared with canopy), the
-// async removal command they dispatch, and the result summarization that
-// turns per-entry outcomes into a status-line notification. app.go owns
-// the Model and the Update switch; this file owns everything those keys
-// set in motion.
+// x/X/P/M and dirty-park's p (its state machine — answers, auto-cancel
+// timeout, poll revalidation — is dashkit's confirm package, shared with
+// canopy), the async removal/park commands they dispatch, and the result
+// summarization that turns per-entry outcomes into a status-line
+// notification. app.go owns the Model and the Update switch; this file
+// owns everything those keys set in motion.
 package tui
 
 import (
@@ -38,6 +38,11 @@ const (
 	// confirmRemoveMerged removes every displayed merged worktree of the
 	// selected row's repo (M), deleting their (merged) branches too.
 	confirmRemoveMerged
+	// confirmParkOne parks the selected worktree (p) when it has
+	// uncommitted changes: parking marks a worktree task-complete, and
+	// dirty and complete contradict each other (coppice's `cop park`
+	// asks the same question). A clean worktree parks without asking.
+	confirmParkOne
 )
 
 // confirmState is a pending confirmation's payload (see
@@ -56,6 +61,65 @@ type confirmState struct {
 // out in tests so app/actions tests can verify dispatch without shelling
 // out to `wt`/`git`; same pattern as app.go's openVSCode seam.
 var removeWorktree = worktree.Remove
+
+// parkWorktree/unparkWorktree are the same kind of seam onto
+// worktree.Park/worktree.Unpark, for the p keybinding's tests.
+var parkWorktree = worktree.Park
+var unparkWorktree = worktree.Unpark
+
+// parkResultMsg reports one finished park/unpark: which entry, which
+// direction, and how it went.
+type parkResultMsg struct {
+	entry    worktree.Entry
+	unparked bool
+	err      error
+}
+
+// parkCmd parks (or, with unpark, unparks) entry's branch via the git
+// config mark and reports the outcome. Non-destructive either way, so
+// unlike removeCmd there's nothing to batch or serialize: one entry, one
+// config write.
+func parkCmd(entry worktree.Entry, unpark bool) tea.Cmd {
+	return func() tea.Msg {
+		var err error
+		if unpark {
+			err = unparkWorktree(entry)
+		} else {
+			err = parkWorktree(entry)
+		}
+		return parkResultMsg{entry: entry, unparked: unpark, err: err}
+	}
+}
+
+// parkOrUnparkCmd is the p keybinding's dispatch: unpark when the
+// selected row is parked (reversible, so it just happens), park
+// otherwise, asking first only when the worktree is dirty (see
+// confirmParkOne). The guards mirror coppice's own parkable set: the
+// main checkout is the repo itself (never parked), and a stale
+// registration's directory is already gone, so there's nothing left to
+// keep for follow-up.
+func (m *Model) parkOrUnparkCmd() tea.Cmd {
+	w, ok := m.selectedWorktree()
+	if !ok {
+		return nil
+	}
+	if w.IsMain {
+		return m.notify("can't park a repo's main worktree", true)
+	}
+	if w.Stale {
+		return m.notify("can't park a stale registration: its directory is already gone", true)
+	}
+	if w.Branch == "" {
+		return nil
+	}
+	if w.Parked() {
+		return parkCmd(w, true)
+	}
+	if w.Dirty {
+		return m.confirm.Arm(confirmState{kind: confirmParkOne, entries: []worktree.Entry{w}})
+	}
+	return parkCmd(w, false)
+}
 
 type removeResultMsg struct{ results []worktree.RemoveResult }
 
@@ -124,6 +188,9 @@ func (m *Model) startConfirm(kind confirmKind) tea.Cmd {
 
 // confirmedCmd builds the command a "yes" answers dispatch.
 func confirmedCmd(c *confirmState) tea.Cmd {
+	if c.kind == confirmParkOne {
+		return parkCmd(c.entries[0], false)
+	}
 	opts := worktree.RemoveOptions{}
 	if c.kind == confirmForceOne {
 		opts = worktree.RemoveOptions{Force: true, ForceDelete: true}
@@ -163,6 +230,10 @@ func (m Model) confirmPrompt() string {
 	switch c.kind {
 	case confirmRemoveOne, confirmForceOne:
 		return m.singleRemovePrompt(c.entries[0], c.kind == confirmForceOne)
+	case confirmParkOne:
+		e := c.entries[0]
+		return fmt.Sprintf("Park %s at %s? Parking marks a worktree task-complete, and uncommitted changes and complete contradict each other. [y/N]",
+			e.Branch, shortenHome(e.Path, m.home))
 	case confirmPruneStale:
 		return fmt.Sprintf("Prune %d stale worktree %s? Their directories are already gone; this only drops the git registrations. [y/N]",
 			len(c.entries), plural(len(c.entries), "registration", "registrations"))

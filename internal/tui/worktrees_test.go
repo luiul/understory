@@ -792,3 +792,64 @@ func TestWorktreeColumnsNeverAppliesAnOverrideToPath(t *testing.T) {
 		t.Fatalf("got Path width %d, want it computed from leftover space, not the override", last.Width)
 	}
 }
+
+func TestWorktreeStatusLabelParkedWinsOverDirtyButNotStale(t *testing.T) {
+	parked := wtEntry("/w/a", "a", time.Hour)
+	parked.ParkedAt = time.Now()
+	if got := worktreeStatusLabel(parked); got != "parked" {
+		t.Fatalf("got %q, want parked", got)
+	}
+
+	parked.Dirty = true
+	if got := worktreeStatusLabel(parked); got != "parked" {
+		t.Fatalf("got %q, want parked to win over dirty", got)
+	}
+
+	parked.Stale = true
+	if got := worktreeStatusLabel(parked); got != "stale" {
+		t.Fatalf("got %q, want stale to win over parked", got)
+	}
+}
+
+func TestWorktreeStatusLabelFollowUpReadsActiveAgain(t *testing.T) {
+	// A head commit newer than the mark means follow-up already happened,
+	// so the worktree reads as active (here: clean), not parked.
+	w := wtEntry("/w/a", "a", 0) // CommitTime ~now
+	w.ParkedAt = time.Now().Add(-time.Hour)
+	if got := worktreeStatusLabel(w); got != "clean" {
+		t.Fatalf("got %q, want clean (follow-up disproved the mark)", got)
+	}
+}
+
+func TestWorktreeSummaryLineCountsParkedBetweenStaleAndDirty(t *testing.T) {
+	dirty := wtEntry("/w/dirty", "dirty-branch", 0)
+	dirty.Dirty = true
+
+	parked := wtEntry("/w/parked", "parked-branch", time.Hour)
+	parked.ParkedAt = time.Now()
+
+	got := worktreeSummaryLine([]worktree.Entry{dirty, parked})
+
+	parkedAt := strings.Index(got, "1 parked")
+	dirtyAt := strings.Index(got, "1 dirty")
+	if parkedAt < 0 || dirtyAt < 0 {
+		t.Fatalf("got %q, want both parked and dirty buckets", got)
+	}
+	if !(dirtyAt < parkedAt) {
+		t.Fatalf("got %q, want dirty before parked", got)
+	}
+}
+
+func TestWorktreeSummaryLineParkedWinsOverDirty(t *testing.T) {
+	// A dirty parked worktree counts as parked, not dirty: parking a dirty
+	// worktree already asked, so the mark is the stronger signal.
+	w := wtEntry("/w/a", "a", time.Hour)
+	w.Dirty = true
+	w.ParkedAt = time.Now()
+
+	got := worktreeSummaryLine([]worktree.Entry{w})
+
+	if !strings.Contains(got, "1 parked") || strings.Contains(got, "dirty") {
+		t.Fatalf("got %q, want it classified as parked", got)
+	}
+}

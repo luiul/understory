@@ -2,6 +2,7 @@ package worktree
 
 import (
 	"errors"
+	"os/exec"
 	"slices"
 	"testing"
 	"time"
@@ -328,5 +329,123 @@ func TestRemoveErrorLeadsWithTheCommandOutput(t *testing.T) {
 	empty := &RemoveError{Branch: "feat-x", Err: errors.New("exit status 1")}
 	if got := empty.Error(); got != "exit status 1" {
 		t.Fatalf("got %q, want the wrapped error when there's no output", got)
+	}
+}
+
+// --- parked marks -------------------------------------------------------
+//
+// The parked mark's storage is git config in a real repo (coppice's own
+// tests cover its format in depth); these exercise the read fold
+// (parkedMarks/applyParked), the write side (Park/Unpark), and the
+// read-time follow-up rule (Entry.Parked).
+
+func initRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	run := func(args ...string) {
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-q", "-b", "main")
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "Test")
+	run("commit", "--allow-empty", "-q", "-m", "init")
+	return dir
+}
+
+func TestEntryParkedRequiresAMark(t *testing.T) {
+	if (Entry{CommitTime: time.Now()}).Parked() {
+		t.Fatal("an entry with no mark is not parked")
+	}
+}
+
+func TestEntryParkedWithNoHeadCommitStaysParked(t *testing.T) {
+	// CommitTime zero (wt genuinely couldn't report one) can't disprove
+	// the mark, same as coppice's `bool(head_ts) and head_ts > parked_ts`.
+	e := Entry{ParkedAt: time.Unix(1_700_000_000, 0)}
+	if !e.Parked() {
+		t.Fatal("a mark with no head time to compare against stays parked")
+	}
+}
+
+func TestEntryParkedUntilTheHeadMovesPastTheMark(t *testing.T) {
+	mark := time.Unix(1_700_000_000, 0)
+	parked := Entry{ParkedAt: mark, CommitTime: mark.Add(-time.Hour)}
+	if !parked.Parked() {
+		t.Fatal("a head older than the mark is parked")
+	}
+	followUp := Entry{ParkedAt: mark, CommitTime: mark.Add(time.Hour)}
+	if followUp.Parked() {
+		t.Fatal("a head newer than the mark is follow-up: active again")
+	}
+}
+
+func TestParkedMarksReadsEveryMarkAndSkipsJunk(t *testing.T) {
+	dir := initRepo(t)
+	run := func(args ...string) {
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("config", "branch.feat-a.parked-at", "1700000000")
+	run("config", "branch.feat-b.parked-at", "not-a-number") // unparsable: skipped, not fatal
+	run("config", "branch.feat-c.remote", "origin")          // unrelated branch config: ignored
+
+	marks := parkedMarks(dir)
+	if len(marks) != 1 || !marks["feat-a"].Equal(time.Unix(1_700_000_000, 0)) {
+		t.Fatalf("got %v, want just feat-a's mark", marks)
+	}
+}
+
+func TestParkedMarksIsEmptyWithoutARepo(t *testing.T) {
+	if got := parkedMarks(t.TempDir()); len(got) != 0 {
+		t.Fatalf("got %v, want no marks for a non-repo", got)
+	}
+}
+
+func TestApplyParkedFoldsMarksIntoMatchingBranches(t *testing.T) {
+	dir := initRepo(t)
+	if err := Park(Entry{RepoPath: dir, Branch: "feat-a"}); err != nil {
+		t.Fatalf("Park: %v", err)
+	}
+	entries := []Entry{{Branch: "feat-a"}, {Branch: "feat-b"}}
+
+	applyParked(entries, dir)
+
+	if entries[0].ParkedAt.IsZero() {
+		t.Fatal("want feat-a's mark folded in")
+	}
+	if !entries[1].ParkedAt.IsZero() {
+		t.Fatal("feat-b carries no mark")
+	}
+}
+
+func TestParkAndUnparkRoundTrip(t *testing.T) {
+	dir := initRepo(t)
+	e := Entry{RepoPath: dir, Branch: "feat-a"}
+
+	before := time.Now().Add(-time.Second)
+	if err := Park(e); err != nil {
+		t.Fatalf("Park: %v", err)
+	}
+	marks := parkedMarks(dir)
+	if len(marks) != 1 || marks["feat-a"].Before(before) || marks["feat-a"].After(time.Now().Add(time.Second)) {
+		t.Fatalf("got %v, want feat-a parked at ~now", marks)
+	}
+
+	if err := Unpark(e); err != nil {
+		t.Fatalf("Unpark: %v", err)
+	}
+	if got := parkedMarks(dir); len(got) != 0 {
+		t.Fatalf("got %v, want the mark gone", got)
+	}
+
+	// A missing key is not an error: unparking something never parked is
+	// a no-op (git exits 5 for it).
+	if err := Unpark(e); err != nil {
+		t.Fatalf("Unpark without a mark: %v", err)
 	}
 }

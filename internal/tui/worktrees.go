@@ -505,11 +505,19 @@ func buildWorktreeRows(worktrees []worktree.Entry, cursor int, home string, now 
 
 // worktreeStatusLabel is the Worktree column's plain-word rendering of
 // Entry's working-tree health: "stale" (see Entry.Stale's doc) takes
-// priority over dirty/clean, since a prunable worktree's uncommitted-
-// changes state is meaningless once its directory is already gone.
+// priority over everything, since a prunable worktree's uncommitted-
+// changes state is meaningless once its directory is already gone. A
+// parked worktree (Entry.Parked: coppice's task-complete mark, with no
+// follow-up since) shows "parked" ahead of dirty/clean too: the mark is
+// the stronger signal (one visual state per row, the same precedence
+// coppice's own dimmed parked rows follow), and a dirty parked one was
+// already acknowledged when it got parked.
 func worktreeStatusLabel(w worktree.Entry) string {
 	if w.Stale {
 		return "stale"
+	}
+	if w.Parked() {
+		return "parked"
 	}
 	if w.Dirty {
 		return "dirty"
@@ -545,13 +553,15 @@ func noWorktreesMessage() string {
 }
 
 // worktreeSummaryLine returns a one-line "N worktrees: N dirty · N stale ·
-// N conflict · N merged · N clean · N unknown" breakdown, one
+// N parked · N conflict · N merged · N clean · N unknown" breakdown, one
 // mutually-exclusive bucket per worktree (most-actionable-first
 // classification, same spirit as canopy's own summaryLine over its State
 // column, folded down to a single dimension since "needs a look" is
 // really one axis here even though it's backed by two Entry fields):
 // Stale wins first (see Entry.Stale's doc: Dirty/MergeStatus are
-// meaningless once true), then Dirty (uncommitted work, worth a look
+// meaningless once true), then Parked (task-complete and set aside,
+// nothing to do unless follow-up arrives — which flips it back to
+// active, see Entry.Parked), then Dirty (uncommitted work, worth a look
 // now), then a conflicting branch (MergeStatusConflict: the one Merge
 // state that gets worse on its own the longer main moves, so it sorts
 // ahead of every other merge relationship), then a merged branch
@@ -581,6 +591,8 @@ func worktreeSummaryLine(entries []worktree.Entry) string {
 		switch {
 		case e.Stale:
 			counts["stale"]++
+		case e.Parked():
+			counts["parked"]++
 		case e.Dirty:
 			counts["dirty"]++
 		case e.MergeStatus == worktree.MergeStatusConflict:
@@ -595,17 +607,18 @@ func worktreeSummaryLine(entries []worktree.Entry) string {
 	}
 
 	var parts []string
-	for _, bucket := range []string{"dirty", "stale", "conflict", "merged", "clean", "unknown"} {
+	for _, bucket := range []string{"dirty", "stale", "parked", "conflict", "merged", "clean", "unknown"} {
 		n := counts[bucket]
 		if n == 0 {
 			continue
 		}
 		// merged/conflict/unknown are Merge-column words
-		// (mergeStatusStyles), dirty/stale/clean are Worktree-column words
-		// (worktreeStatusStyles); looking each up in its own map rather
-		// than reusing one for both keeps this tied to the same source
-		// of truth the table itself renders from, even though "clean"
-		// and "unknown" happen to resolve to the same dim grey today.
+		// (mergeStatusStyles), dirty/stale/parked/clean are Worktree-column
+		// words (worktreeStatusStyles); looking each up in its own map
+		// rather than reusing one for both keeps this tied to the same
+		// source of truth the table itself renders from, even though
+		// "clean" and "unknown" happen to resolve to the same dim grey
+		// today.
 		style := worktreeStatusStyle(bucket)
 		if bucket == "merged" || bucket == "conflict" || bucket == "unknown" {
 			style = mergeStatusStyle(bucket)
