@@ -107,13 +107,13 @@ func TestConfirmEnterCancels(t *testing.T) {
 	updated, _ := m.Update(key("x"))
 	m = updated.(Model)
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(Model)
 	if m.confirm.Active() {
 		t.Fatal("want the prompt closed after enter")
 	}
-	if cmd != nil {
-		t.Fatal("want no removal command after enter")
+	if m.notification != confirm.CancelText() || m.notifyIsError {
+		t.Fatalf("got notification %q (err=%v), want %q", m.notification, m.notifyIsError, confirm.CancelText())
 	}
 	if len(*got) != 0 {
 		t.Fatalf("got %d removals after enter, want none", len(*got))
@@ -128,13 +128,13 @@ func TestConfirmNoAndEscCancelWithoutDispatching(t *testing.T) {
 		updated, _ := m.Update(key("x"))
 		m = updated.(Model)
 
-		updated, cmd := m.Update(k)
+		updated, _ = m.Update(k)
 		m = updated.(Model)
 		if m.confirm.Active() {
 			t.Fatalf("want the prompt closed after %v", k)
 		}
-		if cmd != nil {
-			t.Fatalf("want no command after %v", k)
+		if m.notification != confirm.CancelText() || m.notifyIsError {
+			t.Fatalf("got notification %q (err=%v) after %v, want %q", m.notification, m.notifyIsError, k, confirm.CancelText())
 		}
 		if len(*got) != 0 {
 			t.Fatalf("got %d removals after %v, want none", len(*got), k)
@@ -847,11 +847,14 @@ func TestPOnADirtyRowCancelledParksNothing(t *testing.T) {
 
 	updated, _ := m.Update(key("p"))
 	m = updated.(Model)
-	updated, cmd := m.Update(key("n"))
+	updated, _ = m.Update(key("n"))
 	m = updated.(Model)
 
-	if m.confirm.Active() || cmd != nil {
-		t.Fatal("want the prompt cancelled and nothing dispatched")
+	if m.confirm.Active() {
+		t.Fatal("want the prompt cancelled")
+	}
+	if m.notification != confirm.CancelText() || m.notifyIsError {
+		t.Fatalf("got notification %q (err=%v), want %q", m.notification, m.notifyIsError, confirm.CancelText())
 	}
 	if len(*parked) != 0 {
 		t.Fatalf("parked %+v, want nothing parked", *parked)

@@ -373,7 +373,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, confirmedCmd(c)
 			case confirm.Cancel:
 				m.confirm.Resolve()
-				return m, nil
+				// A cancel notifies too: every resolved prompt does (dashkit's
+				// confirm convention). A quiet cancel reads exactly like a
+				// swallowed keypress, since every other key is swallowed.
+				return m, m.notify(confirm.CancelText(), false)
 			case confirm.Quit:
 				m.quitting = true
 				return m, tea.Quit
