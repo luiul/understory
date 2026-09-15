@@ -18,11 +18,13 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/table"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -168,6 +170,21 @@ type Model struct {
 	confirm  confirm.State[confirmState]
 	helpOpen bool
 
+	// filterQuery is the applied row filter (fuzzy subsequence, see
+	// github.com/luiul/dashkit/sieve), matched against each row's stable
+	// text columns (see filterCells in worktrees.go). filtering is true
+	// while the /-entered filter input owns the keyboard: every
+	// printable key is query text then, not a binding (typing "x" must
+	// never arm a removal), the same modal discipline confirm has. esc
+	// leaves the input with the query still applied; esc in normal mode
+	// clears it. The semantics mirror the jira-today fzf picker, minus
+	// its c-to-clear: c is canopy's dismiss, and one key meaning two
+	// things across the two dashboards is the worst kind of
+	// inconsistency.
+	filterQuery string
+	filtering   bool
+	filterInput textinput.Model
+
 	width, height int
 	quitting      bool
 }
@@ -190,12 +207,16 @@ func New(interval time.Duration, showMain bool) Model {
 	styles.Selected = lipgloss.NewStyle()
 	t.SetStyles(styles)
 
+	fi := textinput.New()
+	fi.Prompt = "filter> "
+
 	return Model{
-		interval: interval,
-		home:     homeDir(),
-		showMain: showMain,
-		table:    t,
-		resizer:  trellis.New(),
+		interval:    interval,
+		home:        homeDir(),
+		showMain:    showMain,
+		table:       t,
+		resizer:     trellis.New(),
+		filterInput: fi,
 	}
 }
 
@@ -384,12 +405,77 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
+		// The filter input is modal too: while it's focused, every
+		// printable key is query text, not a binding (typing "x" must
+		// never arm a removal, typing "q" must never quit). esc leaves
+		// the input with the query still applied (jira-today's picker
+		// semantics); enter keeps its row action, the same way
+		// jira-today keeps enter bound mid-filter, and leaves the input
+		// since the open-or-focus is the end of the filtering flow;
+		// arrows keep moving the table's cursor, since the query text
+		// itself never wants them; ctrl+c quits, as it does from
+		// everywhere.
+		if m.filtering {
+			switch msg.String() {
+			case "esc":
+				m.filtering = false
+				m.filterInput.Blur()
+				return m, nil
+			case "ctrl+c":
+				m.quitting = true
+				return m, tea.Quit
+			case "enter":
+				m.filtering = false
+				m.filterInput.Blur()
+				return m, m.enterCmd()
+			case "up", "down", "pgup", "pgdown":
+				var cmd tea.Cmd
+				m.table, cmd = m.table.Update(msg)
+				m.refreshCursorMarker()
+				return m, cmd
+			case "ctrl+u":
+				// The shell's kill-line: clear the whole query in one
+				// keystroke (jira-today's c does the same mid-filter).
+				m.filterInput.SetValue("")
+			}
+			var cmd tea.Cmd
+			m.filterInput, cmd = m.filterInput.Update(msg)
+			if v := m.filterInput.Value(); v != m.filterQuery {
+				// The selection to preserve must be read BEFORE the query
+				// changes: displayedWorktrees is about to start answering
+				// against the new query, but the table's cursor still
+				// indexes into the old one.
+				previousPath := m.selectedPath()
+				m.filterQuery = v
+				m.redisplay(previousPath)
+			}
+			return m, cmd
+		}
 		switch msg.String() {
 		case "q", "ctrl+c":
 			m.quitting = true
 			return m, tea.Quit
 		case "r":
 			return m, pollCmd()
+		case "/":
+			// Enter filter mode with the current query ready to edit
+			// (cursor at its end), so refining an applied filter is /
+			// then typing, not / then retyping.
+			m.filtering = true
+			m.filterInput.SetValue(m.filterQuery)
+			m.filterInput.CursorEnd()
+			return m, m.filterInput.Focus()
+		case "esc":
+			// Not mid-filter (that esc is intercepted above): clear an
+			// applied filter. A no-op when there is nothing to clear, so
+			// esc always just backs out one layer.
+			if m.filterQuery != "" {
+				previousPath := m.selectedPath()
+				m.filterQuery = ""
+				m.filterInput.SetValue("")
+				m.redisplay(previousPath)
+			}
+			return m, nil
 		case "enter":
 			return m, m.enterCmd()
 		case "x":
@@ -540,7 +626,7 @@ func clampCursor(idx, n int) int {
 // waiting for the next poll.
 func (m *Model) refreshCursorMarker() {
 	m.cursor = clampCursor(m.table.Cursor(), len(m.displayedWorktrees()))
-	m.table.SetRows(buildWorktreeRows(m.displayedWorktrees(), m.cursor, m.home, time.Now(), m.vscode))
+	m.table.SetRows(buildWorktreeRows(m.displayedWorktrees(), m.cursor, m.home, time.Now(), m.vscode, m.filterQuery))
 }
 
 // resize rebuilds columns (Path's width depends on m.width) and rows for
@@ -554,8 +640,8 @@ func (m *Model) resize() {
 	// currently set, so swapping to a column count the old rows don't
 	// match panics if the two are ever briefly out of sync mid-update.
 	m.table.SetRows(nil)
-	m.table.SetColumns(worktreeColumns(m.width, m.displayedWorktrees(), m.colOverrides))
-	m.table.SetRows(buildWorktreeRows(m.displayedWorktrees(), cursor, m.home, time.Now(), m.vscode))
+	m.table.SetColumns(worktreeColumns(m.width, m.visibleWorktrees(), m.colOverrides))
+	m.table.SetRows(buildWorktreeRows(m.displayedWorktrees(), cursor, m.home, time.Now(), m.vscode, m.filterQuery))
 	m.table.SetCursor(cursor)
 }
 
@@ -600,6 +686,8 @@ var helpBindings = []loam.HelpBinding{
 	{Key: "y", Desc: "copy the worktree path to the clipboard"},
 	{Key: "m", Desc: "show or hide each repo's main worktree"},
 	{Key: "r", Desc: "refresh now"},
+	{Key: "/", Desc: "filter the rows (fuzzy); enter still opens while typing, esc applies the filter and leaves the input"},
+	{Key: "esc", Desc: "clear the applied filter (mid-filter: leave the input, filter stays applied)"},
 	{Key: "mouse", Desc: "drag a column border on the header row to resize the two columns it joins"},
 	{Key: "?", Desc: "this help"},
 	{Key: "q, ctrl+c", Desc: "quit"},
@@ -614,9 +702,13 @@ func (m Model) helpView() string {
 
 // footerView renders the bottom line: the confirmation prompt while one
 // is pending (it's modal and swallows all other keys, so it replaces
-// everything else), else the latest notification, else the default
-// keybinding hints, kept to the essentials now that ? opens the full
-// list.
+// everything else), else the filter input while it's focused (also
+// modal, see Update), else the latest notification, else the help
+// overlay's close hint, else the default keybinding hints — with an
+// applied filter's readout in place of the hints, so a filtered view
+// always says so. Kept to one line in every state, so the table's
+// height math (Update's WindowSizeMsg case) never has to care which
+// footer is showing.
 func (m Model) footerView() string {
 	if m.confirm.Active() {
 		style := promptStyle
@@ -624,6 +716,9 @@ func (m Model) footerView() string {
 			style = errorStyle
 		}
 		return style.Render(m.confirmPrompt())
+	}
+	if m.filtering {
+		return m.filterInput.View()
 	}
 	if m.notification != "" {
 		style := okStyle
@@ -635,7 +730,10 @@ func (m Model) footerView() string {
 	if m.helpOpen {
 		return subtleStyle.Render("press any key to close")
 	}
-	return subtleStyle.Render("↑/↓ move · enter open/focus · p park · x remove · ? help · q quit")
+	if m.filterQuery != "" {
+		return subtleStyle.Render(fmt.Sprintf("filter: %s · esc clear · / edit", m.filterQuery))
+	}
+	return subtleStyle.Render("↑/↓ move · enter open/focus · p park · x remove · / filter · ? help · q quit")
 }
 
 // View implements tea.Model.

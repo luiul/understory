@@ -11,6 +11,7 @@ import (
 	"github.com/mattn/go-runewidth"
 
 	"github.com/luiul/dashkit/loam"
+	"github.com/luiul/dashkit/sieve"
 	"github.com/luiul/understory/internal/worktree"
 )
 
@@ -307,7 +308,7 @@ func sortWorktrees(worktrees []worktree.Entry) []worktree.Entry {
 	return sorted
 }
 
-// displayedWorktrees is the view's current row set: every known
+// visibleWorktrees is the row set before any text filter: every known
 // worktree, grouped by repo and most-recently-committed first (see
 // sortWorktrees), with each repo's main worktree (Entry.IsMain, the base
 // branch checkout `wt`/coppice created the others alongside) dropped
@@ -316,7 +317,13 @@ func sortWorktrees(worktrees []worktree.Entry) []worktree.Entry {
 // do (see worktreeSummaryLine/buildWorktreeRows' "-" Merge cell for it),
 // and having it always take the first row of every repo's block was
 // mostly just noise.
-func (m Model) displayedWorktrees() []worktree.Entry {
+//
+// This, not displayedWorktrees, is the set worktreeColumns sizes Repo/
+// Branch against: those columns grow to fit their widest displayed value
+// (see repoColumnWidth/branchColumnWidth), and the text filter changes
+// the displayed set on every keystroke — sizing off it would resize the
+// whole table under the user's fingers while typing a query.
+func (m Model) visibleWorktrees() []worktree.Entry {
 	sorted := sortWorktrees(m.worktrees)
 	if m.showMain {
 		return sorted
@@ -329,6 +336,46 @@ func (m Model) displayedWorktrees() []worktree.Entry {
 		filtered = append(filtered, w)
 	}
 	return filtered
+}
+
+// displayedWorktrees is the view's current row set: visibleWorktrees,
+// plus the fuzzy text filter (filterQuery, see
+// github.com/luiul/dashkit/sieve) while one is applied. m.worktrees
+// itself always holds the full polled set, so polls, the summary line's
+// counts, and the confirmation prompts' revalidation never see the
+// filter at all; only what renders and what the cursor can land on is
+// filtered.
+func (m Model) displayedWorktrees() []worktree.Entry {
+	visible := m.visibleWorktrees()
+	if m.filterQuery == "" {
+		return visible
+	}
+	filtered := make([]worktree.Entry, 0, len(visible))
+	for _, w := range visible {
+		if sieve.Match(m.filterQuery, filterCells(w, m.home, m.vscode)...) {
+			filtered = append(filtered, w)
+		}
+	}
+	return filtered
+}
+
+// filterCells are the cell strings a filterQuery is matched against (see
+// github.com/luiul/dashkit/sieve): the row's stable text columns, which
+// are Repo, Branch (mismatch suffix included, so the path's own branch
+// segment finds the row too), the Worktree and Merge status words, the
+// VS Code state word, and the shortened Path. Created is deliberately
+// excluded: it ticks over under the user's fingers ("12s" becomes
+// "13s"), so a row would match-or-not from one poll to the next for
+// reasons invisible in the query.
+func filterCells(w worktree.Entry, home string, vscode map[string]vscodeState) []string {
+	return []string{
+		repoLabel(w),
+		branchLabel(w),
+		worktreeStatusLabel(w),
+		mergeStatusLabel(w),
+		vscodeCell(vscode[w.Path]),
+		shortenHome(w.Path, home),
+	}
 }
 
 // resolveWorktreeCursor finds path's index in displayed, or falls back to
@@ -390,8 +437,12 @@ func (m *Model) redisplay(previousPath string) {
 	// (bubbles/table re-renders immediately against whatever's currently
 	// set, so a column/row count mismatch mid-update panics).
 	m.table.SetRows(nil)
-	m.table.SetColumns(worktreeColumns(m.width, newDisplayed, m.colOverrides))
-	m.table.SetRows(buildWorktreeRows(newDisplayed, m.cursor, m.home, time.Now(), m.vscode))
+	// Columns size off visibleWorktrees (the set before the text
+	// filter), not newDisplayed: Repo/Branch grow to fit their widest
+	// value, and the filter changes the displayed set on every
+	// keystroke — sizing off it would resize the table mid-query.
+	m.table.SetColumns(worktreeColumns(m.width, m.visibleWorktrees(), m.colOverrides))
+	m.table.SetRows(buildWorktreeRows(newDisplayed, m.cursor, m.home, time.Now(), m.vscode, m.filterQuery))
 	m.table.SetCursor(m.cursor)
 }
 
@@ -466,8 +517,15 @@ func vscodeCell(state vscodeState) string {
 // the same two plain-word signals coppice's own worktree table shows:
 // whether the working tree itself is dirty/clean/stale, and separately
 // whether the branch has been merged into main yet.
-func buildWorktreeRows(worktrees []worktree.Entry, cursor int, home string, now time.Time, vscode map[string]vscodeState) []table.Row {
+func buildWorktreeRows(worktrees []worktree.Entry, cursor int, home string, now time.Time, vscode map[string]vscodeState, filterQuery string) []table.Row {
 	if len(worktrees) == 0 {
+		// An active filter with zero matches says so (and how to back
+		// out) rather than claiming there are no worktrees at all — the
+		// unfiltered message would be a lie about why the table is
+		// empty.
+		if filterQuery != "" {
+			return []table.Row{{"", "", "", "", "", "", fmt.Sprintf("no worktrees match filter %q (esc clears)", filterQuery)}}
+		}
 		return []table.Row{{"", "", "", "", "", "", noWorktreesMessage()}}
 	}
 

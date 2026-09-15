@@ -62,7 +62,7 @@ Repo                  Branch          Created   Worktree  Merge      VS Code  Pa
 luiul/understory      hide-main-wt    12s       dirty     unmerged   open     ~/worktrees/.../understory
 hellofresh/isa-orch…  fix-writeback   3d        clean     unmerged   -        ~/worktrees/.../isa-orchestration
 
-↑/↓ move · enter open/focus · x remove · ? help · q quit
+↑/↓ move · enter open/focus · x remove · / filter · ? help · q quit
 ```
 
 (the currently selected row also gets a full-width grey highlight in the
@@ -181,6 +181,7 @@ wolf.
 | `p` | Park the selected worktree (task complete, kept for follow-up), or unpark a parked one. Parking a dirty one asks first. |
 | `y` | Copy the selected worktree's full path to the clipboard (vim's yank). |
 | `m` | Show or hide each repo's main worktree (same as `--show-main`, at runtime). |
+| `/` | Filter the rows fuzzily (a subsequence match over repo, branch, status, merge state, and path), the same gesture jira-today's fzf picker uses. `enter` still opens while typing; `esc` leaves the input with the filter applied, and a second `esc` clears it. |
 | `?` | Full keybinding list. |
 
 ### Conventions
