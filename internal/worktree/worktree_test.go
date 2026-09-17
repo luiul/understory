@@ -2,7 +2,9 @@ package worktree
 
 import (
 	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -21,9 +23,12 @@ func TestParseListOutputMapsFieldsAndComputesDirty(t *testing.T) {
 		}
 	]`)
 
-	entries, _, err := parseListOutput(raw)
+	entries, skipped, err := parseListOutput(raw)
 	if err != nil {
 		t.Fatalf("got err %v", err)
+	}
+	if skipped != 0 {
+		t.Fatalf("got %d skipped entries, want 0 for a clean parse", skipped)
 	}
 	if len(entries) != 1 {
 		t.Fatalf("got %d entries, want 1", len(entries))
@@ -110,6 +115,23 @@ func TestParseListOutputEmptyOrBlankIsNoEntriesNoError(t *testing.T) {
 func TestParseListOutputInvalidJSONErrors(t *testing.T) {
 	if _, _, err := parseListOutput([]byte("not json")); err == nil {
 		t.Fatal("want an error for invalid JSON")
+	}
+}
+
+func TestParseListOutputSkipsAMalformedEntryInsteadOfFailingTheRepo(t *testing.T) {
+	// Decoding is per entry: one malformed object (here: branch is a
+	// number) skips just that entry, it doesn't fail the whole repo's
+	// output and blank every sibling row for a poll.
+	raw := []byte(`[
+		{"branch": "main", "path": "/p", "commit": {"timestamp": 0}, "working_tree": {}, "repo": {}},
+		{"branch": 42, "path": 7}
+	]`)
+	entries, skipped, err := parseListOutput(raw)
+	if err != nil {
+		t.Fatalf("got err %v, want per-entry tolerance", err)
+	}
+	if skipped != 1 || len(entries) != 1 || entries[0].Branch != "main" {
+		t.Fatalf("got %d entries (skipped %d): %+v, want the one valid entry plus one skip", len(entries), skipped, entries)
 	}
 }
 
@@ -288,6 +310,60 @@ func TestListAllReturnsNilWhenWtIsNotOnPath(t *testing.T) {
 	// ever checking Available(), returning an empty set rather than an error.
 	if got := ListAll(nil); got != nil {
 		t.Fatalf("got %+v, want nil for no repo paths", got)
+	}
+}
+
+// writeFakeWt puts a fake `wt` binary first on PATH (a temp-dir shim):
+// it answers instantly with one main-worktree JSON entry for most
+// repos, but stalls for any repo whose path contains "slow" — the
+// issue #7 shape, where concurrent polls pushed real repos past the
+// timeout. The stall is `exec sleep`, so the timeout's SIGKILL hits the
+// sleep itself with no orphaned grandchild holding the stdout pipe open.
+func writeFakeWt(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	shim := `#!/bin/sh
+repo=""
+while [ $# -gt 0 ]; do
+  if [ "$1" = "-C" ]; then repo="$2"; shift 2; continue; fi
+  shift
+done
+case "$repo" in
+  *slow*) exec sleep 10 ;;
+  *) printf '[{"branch":"main","path":"%s","is_main":true,"commit":{"timestamp":0},"working_tree":{},"repo":{"owner":"acme","name":"widgets"}}]' "$repo" ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(dir, "wt"), []byte(shim), 0o755); err != nil {
+		t.Fatalf("write the fake wt: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func TestListAllReportsAHealthyRepoAlongsideATimedOutOne(t *testing.T) {
+	writeFakeWt(t)
+	// The timeout needs real margin on both sides: even the instant shim
+	// pays ~0.7s of process-spawn overhead on this machine class, and the
+	// slow repo must be killed well before its own sleep ends.
+	old := listTimeout
+	listTimeout = 2 * time.Second
+	t.Cleanup(func() { listTimeout = old })
+
+	start := time.Now()
+	results := ListAll([]string{"/repo/slow", "/repo/fast"})
+	elapsed := time.Since(start)
+
+	if len(results) != 2 {
+		t.Fatalf("got %d results, want one per repo", len(results))
+	}
+	slow, fast := results[0], results[1]
+	if fast.Err != nil || len(fast.Entries) != 1 || fast.Entries[0].RepoPath != "/repo/fast" {
+		t.Fatalf("fast repo: got %+v, want its one entry and no error", fast)
+	}
+	if slow.Err == nil || len(slow.Entries) != 0 {
+		t.Fatalf("slow repo: got %+v, want its timeout error and no entries", slow)
+	}
+	if elapsed >= 8*time.Second {
+		t.Fatalf("ListAll took %s, want the slow repo killed at the 2s timeout, not waited out (the shim sleeps 10s)", elapsed)
 	}
 }
 

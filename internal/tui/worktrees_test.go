@@ -856,3 +856,149 @@ func TestWorktreeSummaryLineParkedWinsOverDirty(t *testing.T) {
 		t.Fatalf("got %q, want it classified as parked", got)
 	}
 }
+
+// --- per-repo poll merge (issue #7) -------------------------------------
+//
+// applyPollResults is the production poll path (see the pollResultMsg
+// case in Update): a repo whose poll succeeded replaces its entries
+// wholesale, a repo whose poll errored keeps its last-known rows, and
+// the poll-health counters drive the placeholder and the summary line's
+// suffix.
+
+// okResult builds the RepoResult of a repo whose poll succeeded.
+func okResult(repoPath string, entries ...worktree.Entry) worktree.RepoResult {
+	return worktree.RepoResult{RepoPath: repoPath, Entries: entries}
+}
+
+// repoEntry is wtEntry plus the owning repo's path, which the per-repo
+// merge keys on (applyPollResults).
+func repoEntry(repoPath, path, branch string) worktree.Entry {
+	e := wtEntry(path, branch, 0)
+	e.RepoPath = repoPath
+	return e
+}
+
+func TestApplyPollResultsKeepsAFailedReposLastKnownRows(t *testing.T) {
+	m := New(999, false)
+	a, b := repoEntry("/repo/a", "/w/a", "a"), repoEntry("/repo/b", "/w/b", "b")
+	m.applyPollResults(pollResultMsg{results: []worktree.RepoResult{
+		okResult("/repo/a", a),
+		okResult("/repo/b", b),
+	}})
+
+	m.applyPollResults(pollResultMsg{results: []worktree.RepoResult{
+		okResult("/repo/a", a),
+		{RepoPath: "/repo/b", Err: errors.New("timed out")},
+	}})
+
+	got := pathsOf(m.displayedWorktrees())
+	if len(got) != 2 || !strings.Contains(strings.Join(got, ","), "/w/b") {
+		t.Fatalf("got %v, want /w/b kept from its last good poll", got)
+	}
+}
+
+func TestApplyPollResultsReplacesAHealthyRepoDownToZero(t *testing.T) {
+	// A repo whose poll succeeded with zero entries must drop its rows:
+	// keeping last-known rows is only for repos whose poll ERRORED —
+	// otherwise an externally removed worktree would never disappear.
+	m := New(999, false)
+	b := repoEntry("/repo/b", "/w/b", "b")
+	m.applyPollResults(pollResultMsg{results: []worktree.RepoResult{okResult("/repo/b", b)}})
+
+	m.applyPollResults(pollResultMsg{results: []worktree.RepoResult{okResult("/repo/b")}})
+
+	if got := m.displayedWorktrees(); len(got) != 0 {
+		t.Fatalf("got %v, want the repo's rows gone after a successful empty poll", pathsOf(got))
+	}
+}
+
+func TestApplyPollResultsDropsARepoMissingFromTheResults(t *testing.T) {
+	// A repo that left the registry between polls isn't in the results at
+	// all, and its rows were only authoritative while it was registered.
+	m := New(999, false)
+	b := repoEntry("/repo/b", "/w/b", "b")
+	m.applyPollResults(pollResultMsg{results: []worktree.RepoResult{okResult("/repo/b", b)}})
+
+	m.applyPollResults(pollResultMsg{results: []worktree.RepoResult{okResult("/repo/a")}})
+
+	if got := m.displayedWorktrees(); len(got) != 0 {
+		t.Fatalf("got %v, want the unregistered repo's rows gone", pathsOf(got))
+	}
+}
+
+func TestApplyPollResultsKeepsAFailedReposWindowStates(t *testing.T) {
+	// The window-state maps arrive covering only the poll's successful
+	// repos; a failed repo's kept rows would otherwise render "?" for a
+	// poll, the same flicker the row merge exists to kill.
+	m := New(999, false)
+	b := repoEntry("/repo/b", "/w/b", "b")
+	m.applyPollResults(pollResultMsg{
+		results:      []worktree.RepoResult{okResult("/repo/b", b)},
+		vscode:       map[string]vscodeState{"/w/b": vscodeOpen},
+		vscodeStrict: map[string]bool{"/w/b": true},
+	})
+
+	m.applyPollResults(pollResultMsg{
+		results:      []worktree.RepoResult{{RepoPath: "/repo/b", Err: errors.New("timed out")}},
+		vscode:       map[string]vscodeState{},
+		vscodeStrict: map[string]bool{},
+	})
+
+	if m.vscode["/w/b"] != vscodeOpen || !m.vscodeStrict["/w/b"] {
+		t.Fatalf("got vscode=%v strict=%v, want the last-known states kept", m.vscode, m.vscodeStrict)
+	}
+}
+
+func TestApplyPollResultsNotifiesOnceOnTheZeroToNFailureTransition(t *testing.T) {
+	m := New(999, false)
+	a := repoEntry("/repo/a", "/w/a", "a")
+	ok := pollResultMsg{results: []worktree.RepoResult{okResult("/repo/a", a)}}
+	fail := pollResultMsg{results: []worktree.RepoResult{{RepoPath: "/repo/a", Err: errors.New("timed out")}}}
+	m.applyPollResults(ok)
+
+	if cmd := m.applyPollResults(fail); cmd == nil || !m.notifyIsError || !strings.Contains(m.notification, "1 repo timed out or errored") {
+		t.Fatalf("got notification %q (err=%v), want the transition notification", m.notification, m.notifyIsError)
+	}
+	token := m.notifyToken
+
+	// Still failing on the next poll: no re-notification, the summary
+	// line's suffix already carries it.
+	if cmd := m.applyPollResults(fail); cmd != nil || m.notifyToken != token {
+		t.Fatal("want no new notification while the failure just persists")
+	}
+
+	// A clean poll re-arms it, so a LATER failure notifies again.
+	m.applyPollResults(ok)
+	if cmd := m.applyPollResults(fail); cmd == nil || m.notifyToken == token {
+		t.Fatal("want the notification to re-arm after a clean poll")
+	}
+}
+
+func TestSummaryLineSuffixesUnreachableRepos(t *testing.T) {
+	m := New(999, false)
+	a := repoEntry("/repo/a", "/w/a", "a")
+	m.applyPollResults(pollResultMsg{results: []worktree.RepoResult{
+		okResult("/repo/a", a),
+		{RepoPath: "/repo/b", Err: errors.New("timed out")},
+	}})
+
+	if got := m.summaryLine(); !strings.Contains(got, "1 repo unreachable") {
+		t.Fatalf("got %q, want the unreachable-repos suffix", got)
+	}
+}
+
+func TestSummaryLineNotesHiddenMainWorktrees(t *testing.T) {
+	m := New(999, false)
+	main := repoEntry("/repo/a", "/w/main", "main")
+	main.IsMain = true
+	feature := repoEntry("/repo/a", "/w/a", "a")
+	m.applyPollResults(pollResultMsg{results: []worktree.RepoResult{okResult("/repo/a", main, feature)}})
+
+	if got := m.summaryLine(); !strings.Contains(got, "(+1 main hidden)") {
+		t.Fatalf("got %q, want the hidden-mains note while showMain is off", got)
+	}
+	m.showMain = true
+	if got := m.summaryLine(); strings.Contains(got, "main hidden") {
+		t.Fatalf("got %q, want no hidden-mains note while showMain is on", got)
+	}
+}

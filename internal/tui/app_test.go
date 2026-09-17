@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -541,5 +542,65 @@ func TestViewMarksColumnBordersOnTheHeaderRowSoThereIsSomethingToDrag(t *testing
 	// 7 columns, so 6 internal borders.
 	if n := strings.Count(headerLine, loam.BorderGlyph); n != 6 {
 		t.Fatalf("header line has %d border glyphs, want 6 (one per internal column border): %q", n, headerLine)
+	}
+}
+
+// --- poll health states (issue #7) --------------------------------------
+
+func TestRKeyIsANoopWhileAPollIsInFlight(t *testing.T) {
+	// A fresh model counts Init's first poll as in flight (see New):
+	// pressing r must not pile a second poll's subprocess fan-out on top
+	// of it (see pollOnce).
+	m := New(999, false)
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")}); cmd != nil {
+		t.Fatal("want r to be a no-op while a poll is in flight")
+	}
+}
+
+func TestPlaceholderShowsLoadingBeforeTheFirstPollLands(t *testing.T) {
+	// The old message claimed "no known worktrees" for the whole first
+	// poll's duration (5-11s+), which read as a lie on every launch.
+	m := New(999, false)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 150, Height: 40})
+	m = updated.(Model)
+
+	rows := m.table.Rows()
+	if len(rows) != 1 || !strings.Contains(rows[0][colPath], "loading worktrees") {
+		t.Fatalf("got rows %v, want the loading placeholder", rows)
+	}
+}
+
+func TestPlaceholderNamesTheFailureWhenNothingIsLeftToShow(t *testing.T) {
+	// Every repo errored on the first poll and there are no last-known
+	// rows to keep: the placeholder must say the poll failed, not claim
+	// there are no worktrees.
+	m := New(999, false)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 150, Height: 40})
+	m = updated.(Model)
+	updated, _ = m.Update(pollResultMsg{results: []worktree.RepoResult{
+		{RepoPath: "/repo/a", Err: errors.New("timed out")},
+		{RepoPath: "/repo/b", Err: errors.New("timed out")},
+	}})
+	m = updated.(Model)
+
+	rows := m.table.Rows()
+	if len(rows) != 1 || !strings.Contains(rows[0][colPath], "couldn't poll worktrees (2 repos timed out or errored); r retries") {
+		t.Fatalf("got rows %v, want the total-failure placeholder", rows)
+	}
+}
+
+func TestPlaceholderAfterASuccessfulEmptyPollIsTheOldMessage(t *testing.T) {
+	// A poll that landed and genuinely found nothing keeps the original
+	// "no known worktrees" guidance (whatever shape noWorktreesMessage
+	// gives it on this machine).
+	m := New(999, false)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 150, Height: 40})
+	m = updated.(Model)
+	updated, _ = m.Update(pollResultMsg{results: []worktree.RepoResult{okResult("/repo/a")}})
+	m = updated.(Model)
+
+	rows := m.table.Rows()
+	if len(rows) != 1 || rows[0][colPath] != noWorktreesMessage() {
+		t.Fatalf("got rows %v, want the no-known-worktrees placeholder", rows)
 	}
 }
