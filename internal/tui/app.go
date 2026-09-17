@@ -122,6 +122,14 @@ type Model struct {
 	worktrees []worktree.Entry // every known worktree, raw (unsorted) from the last successful poll
 	cursor    int              // remembers selection by-path across polls; table.Cursor() is the live ground truth while running
 
+	// pollInFlight is true while a pollCmd is running: tickMsg, FocusMsg,
+	// r, and the post-mutation refreshes all ask for a poll, and without a
+	// guard they pile a second 8-way `wt list` subprocess fan-out on top
+	// of the one already running — exactly the contention that pushes
+	// repos past their timeout (issue #7). Set by New (Init's first poll)
+	// and pollOnce, cleared when the pollResultMsg lands.
+	pollInFlight bool
+
 	// vscode is the last poll's per-path VS Code window states (see
 	// pollResultMsg), read by buildWorktreeRows for the VS Code column.
 	// Nil before the first poll lands; a nil map renders every row as
@@ -211,12 +219,13 @@ func New(interval time.Duration, showMain bool) Model {
 	fi.Prompt = "filter> "
 
 	return Model{
-		interval:    interval,
-		home:        homeDir(),
-		showMain:    showMain,
-		table:       t,
-		resizer:     trellis.New(),
-		filterInput: fi,
+		interval:     interval,
+		home:         homeDir(),
+		showMain:     showMain,
+		table:        t,
+		resizer:      trellis.New(),
+		filterInput:  fi,
+		pollInFlight: true, // Init always starts the first poll; Init's value receiver can't mark it, so New does
 	}
 }
 
@@ -227,6 +236,20 @@ func (m Model) Init() tea.Cmd {
 
 func tickCmd(interval time.Duration) tea.Cmd {
 	return tea.Tick(interval, func(time.Time) tea.Msg { return tickMsg{} })
+}
+
+// pollOnce is the only way Update starts a poll: it returns pollCmd()
+// and marks the poll in flight, or nil when one is already running —
+// its result lands soon enough either way, and piling on a second
+// fan-out doubles the contention that causes poll timeouts. Skipping
+// silently is fine even for an explicit r: the in-flight poll's result
+// is by definition fresher than whatever the user is looking at.
+func (m *Model) pollOnce() tea.Cmd {
+	if m.pollInFlight {
+		return nil
+	}
+	m.pollInFlight = true
+	return pollCmd()
 }
 
 func pollCmd() tea.Cmd {
@@ -456,7 +479,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 		case "r":
-			return m, pollCmd()
+			return m, m.pollOnce()
 		case "/":
 			// Enter filter mode with the current query ready to edit
 			// (cursor at its end), so refining an applied filter is /
@@ -519,7 +542,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tickMsg:
-		return m, tea.Batch(pollCmd(), tickCmd(m.interval))
+		return m, tea.Batch(m.pollOnce(), tickCmd(m.interval))
 
 	case tea.FocusMsg:
 		// The user just switched to this window, which is almost always
@@ -529,11 +552,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// worktree created seconds ago is invisible until the next tick
 		// (up to interval away), which reads as "understory isn't listing
 		// it". Poll immediately on focus instead of making the user wait
-		// or hit r. This is an extra poll on top of the tick chain, which
-		// keeps its own cadence either way.
-		return m, pollCmd()
+		// or hit r — unless a poll is already in flight (see pollOnce),
+		// in which case its fresh result is landing shortly anyway. This
+		// is an extra poll on top of the tick chain, which keeps its own
+		// cadence either way.
+		return m, m.pollOnce()
 
 	case pollResultMsg:
+		m.pollInFlight = false
 		m.vscode = msg.vscode
 		m.vscodeStrict = msg.vscodeStrict
 		m.applyWorktrees(msg.worktrees)
@@ -550,7 +576,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// away).
 		for _, r := range msg.results {
 			if r.Err == nil {
-				return m, tea.Batch(cmd, pollCmd())
+				return m, tea.Batch(cmd, m.pollOnce())
 			}
 		}
 		return m, cmd
@@ -565,7 +591,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Refresh right away so the row's parked rendering changes now
 		// instead of on the next tick (up to interval away).
-		return m, tea.Batch(m.notify(text, false), pollCmd())
+		return m, tea.Batch(m.notify(text, false), m.pollOnce())
 
 	case copyResultMsg:
 		if msg.err != nil {

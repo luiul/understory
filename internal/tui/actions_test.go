@@ -526,8 +526,12 @@ func TestRemoveMergedWithNoneMergedJustNotifies(t *testing.T) {
 }
 
 func TestRemoveResultSuccessNotifiesAndRepolls(t *testing.T) {
+	// A fresh model counts Init's first poll as in flight (see New), and
+	// the repoll is guarded (see pollOnce): land a poll first so the
+	// removal's repoll can actually start.
 	m := New(999, false)
-	updated, cmd := m.Update(removeResultMsg{results: []worktree.RemoveResult{
+	updated, _ := m.Update(pollResultMsg{})
+	updated, cmd := updated.(Model).Update(removeResultMsg{results: []worktree.RemoveResult{
 		{Entry: wtEntry("/w/a", "a", 0), Err: nil},
 	}})
 	m = updated.(Model)

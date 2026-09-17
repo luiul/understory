@@ -102,8 +102,12 @@ func TestStaleClearNotifyMsgIsIgnored(t *testing.T) {
 func TestFocusMsgTriggersAnImmediatePoll(t *testing.T) {
 	// Switching to understory's window must refresh right away (see the
 	// tea.FocusMsg case in Update): a worktree created in another window
-	// can't wait up to interval for the next tick.
+	// can't wait up to interval for the next tick. A fresh model counts
+	// Init's first poll as in flight (see New), so land one first — focus
+	// during an in-flight poll deliberately doesn't pile on a second.
 	m := New(999, false)
+	updated, _ := m.Update(pollResultMsg{})
+	m = updated.(Model)
 	_, cmd := m.Update(tea.FocusMsg{})
 	if cmd == nil {
 		t.Fatal("want a poll command on focus")
@@ -157,7 +161,11 @@ func TestCursorSentinelFollowsArrowKeysBetweenPolls(t *testing.T) {
 }
 
 func TestRKeyTriggersAPoll(t *testing.T) {
+	// A fresh model counts Init's first poll as in flight (see New), so
+	// land one first: r while a poll runs is a deliberate no-op.
 	m := New(999, false)
+	updated, _ := m.Update(pollResultMsg{})
+	m = updated.(Model)
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
 	if cmd == nil {
 		t.Fatal("want r to return a poll command")
