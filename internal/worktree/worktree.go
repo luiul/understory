@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -267,9 +268,16 @@ type rawEntry struct {
 // output couldn't be parsed. ListAll reports that error per repo (see
 // RepoResult) rather than failing the whole poll over it.
 func ListWorktrees(repoPath string) ([]Entry, error) {
+	entries, _, err := listWorktrees(repoPath)
+	return entries, err
+}
+
+// listWorktrees is ListWorktrees plus the malformed-entry count (see
+// parseListOutput), which ListAll's debug log reports.
+func listWorktrees(repoPath string) ([]Entry, int, error) {
 	bin, ok := binaryPath()
 	if !ok {
-		return nil, errNotInstalled
+		return nil, 0, errNotInstalled
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), listTimeout)
@@ -277,11 +285,11 @@ func ListWorktrees(repoPath string) ([]Entry, error) {
 	args := []string{"-C", repoPath, "--config-set", "list.json-schema=1", "list", "--format", "json"}
 	out, err := exec.CommandContext(ctx, bin, args...).Output()
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	entries, _, err := parseListOutput(out)
+	entries, skipped, err := parseListOutput(out)
 	if err != nil {
-		return nil, err
+		return nil, skipped, err
 	}
 	for i := range entries {
 		entries[i].RepoPath = repoPath
@@ -289,7 +297,28 @@ func ListWorktrees(repoPath string) ([]Entry, error) {
 	applyRepoFallback(entries, repoPath)
 	applyCreatedTime(entries)
 	applyParked(entries, repoPath)
-	return entries, nil
+	return entries, skipped, nil
+}
+
+// debugLogPath, when set (UNDERSTORY_DEBUG=<path>), gets one line
+// appended per repo per ListAll poll — timestamp, repo, duration,
+// entries, skipped, error — the visibility into WHY a repo's rows are
+// last-known that the view itself deliberately doesn't give (issue #7:
+// the timeouts behind it were invisible until measured by hand).
+var debugLogPath = os.Getenv("UNDERSTORY_DEBUG")
+
+// debugf appends one line to the debug log (see debugLogPath). Best
+// effort: an unwritable log path must never break a poll.
+func debugf(format string, args ...any) {
+	if debugLogPath == "" {
+		return
+	}
+	f, err := os.OpenFile(debugLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, format+"\n", args...)
 }
 
 // applyCreatedTime fills in CreatedTime (mutating entries in place),
@@ -502,7 +531,10 @@ func ListAll(repoPaths []string) []RepoResult {
 		go func(i int, repo string) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			entries, err := ListWorktrees(repo)
+			start := time.Now()
+			entries, skipped, err := listWorktrees(repo)
+			debugf("%s repo=%s duration=%s entries=%d skipped=%d err=%v",
+				start.Format(time.RFC3339), repo, time.Since(start).Round(time.Millisecond), len(entries), skipped, err)
 			results[i] = RepoResult{RepoPath: repo, Entries: entries, Err: err}
 		}(i, repo)
 	}
