@@ -233,8 +233,8 @@ func pollCmd() tea.Cmd {
 	return func() tea.Msg {
 		entries := worktree.ListAll(worktree.KnownRepoPaths())
 		// One window snapshot per poll, shared across every row's query
-		// (see mycelium.SnapshotVSCode): one read of the window registry
-		// directory, and git work-tree lookups are memoized across rows.
+		// (see mycelium.SnapshotVSCode): one osascript listing of the
+		// window titles, and git work-tree lookups are memoized across rows.
 		snap := snapshotVSCode()
 		return pollResultMsg{
 			worktrees:    entries,
@@ -253,7 +253,7 @@ var openVSCode = mycelium.OpenVSCode
 
 // vscodeSnapshot is the slice of mycelium.VSCodeSnapshot a poll needs,
 // kept to an interface so tests can feed vscodeStates a fake without
-// touching the window registry (see the fakeVSCodeSnapshot in
+// touching the real window listing (see the fakeVSCodeSnapshot in
 // worktrees_test.go).
 type vscodeSnapshot interface {
 	Err() error

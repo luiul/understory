@@ -105,10 +105,11 @@ newer head commit flips the row back to active on its own, the same
 read-time rule `cop list` applies, so a stale mark never needs cleaning
 up. The VS Code
 column tells you whether a VS Code window is already open on the
-worktree (`open`, `-`, or `?` when the window registry couldn't be
-read): it answers with the exact same already-open check Enter's
-open-or-focus runs (see below), so `open` means Enter would focus that
-window rather than open a new one.
+worktree (`open`, `-`, or `?` when the window listing couldn't be
+read, or came back empty while Code is running): it answers with the
+exact same already-open check Enter's open-or-focus runs (see below),
+so `open` means Enter would focus that window rather than open a new
+one.
 
 Each internal column border can be dragged with the mouse to widen or
 narrow it: the two columns it sits between trade width between
@@ -134,9 +135,10 @@ dragged keep their automatic sizing.
 Enter opens (or, if a window is already open on that path, focuses) a VS
 Code window there via [`github.com/luiul/dashkit/mycelium`](https://github.com/luiul/dashkit/tree/main/mycelium)'s
 shared open-or-focus logic: it checks for an already-open window itself
-first, by exact folder path against the window registry
-(`~/.local/state/vscode-windows/`, written by dashkit's
-vscode-window-registry extension), and only forces a brand-new one
+first, by exact folder path against the window titles (the dotfiles
+`window.title` setting renders each title as the opened folder's full
+path, so one System Events listing answers it), focuses the matched
+window directly with an AXRaise, and only forces a brand-new one
 (`-n`) once it knows none is already open. `code
 --reuse-window` alone turns out not to be enough for this, since it
 silently hijacks whichever window was last active instead of opening a
@@ -261,14 +263,16 @@ dashboard.
 ```bash
 cd understory
 scripts/install.sh   # builds, installs to ~/.local/bin, code-signs with a
-                     # stable local identity (a leftover from the
-                     # AppleScript window-detection era, kept harmlessly;
-                     # understory has needed no macOS permission since
-                     # dashkit v0.8.0's window registry)
+                     # stable local identity so the macOS Automation
+                     # permission (needed by mycelium's System Events
+                     # window listing and raise on every poll and Enter)
+                     # survives future rebuilds instead of resetting
+                     # every time -- see the script's own comment for
+                     # why and how to set up that signing identity once
 ```
 
-Or, without the stable signature (identical behavior; understory needs
-no macOS permission):
+Or, without the stable signature (works, but expect to re-grant
+Automation after every rebuild):
 
 ```bash
 cd understory

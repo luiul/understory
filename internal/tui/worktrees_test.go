@@ -282,7 +282,7 @@ func TestBuildWorktreeRowsShowsTheMismatchSuffixInTheBranchCell(t *testing.T) {
 
 // fakeVSCodeSnapshot implements the vscodeSnapshot seam with a canned
 // open set (or a read error), so the column's poll-to-cell path is
-// testable without the window registry; mycelium's own suite covers
+// testable without the real window listing; mycelium's own suite covers
 // the matching itself.
 type fakeVSCodeSnapshot struct {
 	open   map[string]bool
