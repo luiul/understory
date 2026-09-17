@@ -21,7 +21,7 @@ func TestParseListOutputMapsFieldsAndComputesDirty(t *testing.T) {
 		}
 	]`)
 
-	entries, err := parseListOutput(raw)
+	entries, _, err := parseListOutput(raw)
 	if err != nil {
 		t.Fatalf("got err %v", err)
 	}
@@ -55,7 +55,7 @@ func TestParseListOutputStripsStrayANSIEscapeBytes(t *testing.T) {
 	// delimiter here, so parseListOutput strips it before decoding.
 	raw := []byte("[{\"branch\": \"main\", \"path\": \"/repo\", \"is_main\": true, \"commit\": {\"timestamp\": 0}, \"working_tree\": {}, \"repo\": {}, \"symbols\": \"\x1b\"}]")
 
-	entries, err := parseListOutput(raw)
+	entries, _, err := parseListOutput(raw)
 	if err != nil {
 		t.Fatalf("got err %v", err)
 	}
@@ -74,7 +74,7 @@ func TestParseListOutputTreatsEveryWorkingTreeFlagAsDirty(t *testing.T) {
 	}
 	for _, wt := range cases {
 		raw := []byte(`[{"branch": "b", "path": "/p", "commit": {"timestamp": 0}, "working_tree": ` + wt + `, "repo": {}}]`)
-		entries, err := parseListOutput(raw)
+		entries, _, err := parseListOutput(raw)
 		if err != nil {
 			t.Fatalf("got err %v for %s", err, wt)
 		}
@@ -86,7 +86,7 @@ func TestParseListOutputTreatsEveryWorkingTreeFlagAsDirty(t *testing.T) {
 
 func TestParseListOutputCleanWorktreeIsNotDirty(t *testing.T) {
 	raw := []byte(`[{"branch": "main", "path": "/p", "commit": {"timestamp": 0}, "working_tree": {}, "repo": {}}]`)
-	entries, err := parseListOutput(raw)
+	entries, _, err := parseListOutput(raw)
 	if err != nil {
 		t.Fatalf("got err %v", err)
 	}
@@ -97,7 +97,7 @@ func TestParseListOutputCleanWorktreeIsNotDirty(t *testing.T) {
 
 func TestParseListOutputEmptyOrBlankIsNoEntriesNoError(t *testing.T) {
 	for _, raw := range [][]byte{nil, []byte(""), []byte("   \n")} {
-		entries, err := parseListOutput(raw)
+		entries, _, err := parseListOutput(raw)
 		if err != nil {
 			t.Fatalf("got err %v for %q", err, raw)
 		}
@@ -108,7 +108,7 @@ func TestParseListOutputEmptyOrBlankIsNoEntriesNoError(t *testing.T) {
 }
 
 func TestParseListOutputInvalidJSONErrors(t *testing.T) {
-	if _, err := parseListOutput([]byte("not json")); err == nil {
+	if _, _, err := parseListOutput([]byte("not json")); err == nil {
 		t.Fatal("want an error for invalid JSON")
 	}
 }
@@ -118,7 +118,7 @@ func TestParseListOutputMultipleWorktrees(t *testing.T) {
 		{"branch": "main", "path": "/repo", "is_main": true, "commit": {"timestamp": 1}, "working_tree": {}, "repo": {"owner": "o", "name": "r"}},
 		{"branch": "feature", "path": "/repo-feature", "is_main": false, "commit": {"timestamp": 2}, "working_tree": {"modified": true}, "repo": {"owner": "o", "name": "r"}}
 	]`)
-	entries, err := parseListOutput(raw)
+	entries, _, err := parseListOutput(raw)
 	if err != nil {
 		t.Fatalf("got err %v", err)
 	}
@@ -132,7 +132,7 @@ func TestParseListOutputMultipleWorktrees(t *testing.T) {
 
 func TestParseListOutputMarksAPrunableWorktreeStale(t *testing.T) {
 	raw := []byte(`[{"branch": "gone", "path": "/gone", "commit": {"timestamp": 0}, "working_tree": {}, "repo": {}, "worktree": {"state": "prunable"}}]`)
-	entries, err := parseListOutput(raw)
+	entries, _, err := parseListOutput(raw)
 	if err != nil {
 		t.Fatalf("got err %v", err)
 	}
@@ -143,7 +143,7 @@ func TestParseListOutputMarksAPrunableWorktreeStale(t *testing.T) {
 
 func TestParseListOutputMarksABranchWorktreeMismatch(t *testing.T) {
 	raw := []byte(`[{"branch": "feature/other", "path": "/w/review-jamie/repo", "commit": {"timestamp": 0}, "working_tree": {}, "repo": {}, "worktree": {"state": "branch_worktree_mismatch"}}]`)
-	entries, err := parseListOutput(raw)
+	entries, _, err := parseListOutput(raw)
 	if err != nil {
 		t.Fatalf("got err %v", err)
 	}
@@ -157,7 +157,7 @@ func TestParseListOutputMarksABranchWorktreeMismatch(t *testing.T) {
 
 func TestParseListOutputRightfulPathIsNotAMismatch(t *testing.T) {
 	raw := []byte(`[{"branch": "b", "path": "/p", "commit": {"timestamp": 0}, "working_tree": {}, "repo": {}, "worktree": {"state": "active"}}]`)
-	entries, err := parseListOutput(raw)
+	entries, _, err := parseListOutput(raw)
 	if err != nil {
 		t.Fatalf("got err %v", err)
 	}
@@ -168,7 +168,7 @@ func TestParseListOutputRightfulPathIsNotAMismatch(t *testing.T) {
 
 func TestParseListOutputNonPrunableWorktreeIsNotStale(t *testing.T) {
 	raw := []byte(`[{"branch": "b", "path": "/p", "commit": {"timestamp": 0}, "working_tree": {}, "repo": {}, "worktree": {"state": "branch_worktree_mismatch"}}]`)
-	entries, err := parseListOutput(raw)
+	entries, _, err := parseListOutput(raw)
 	if err != nil {
 		t.Fatalf("got err %v", err)
 	}

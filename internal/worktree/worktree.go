@@ -279,7 +279,7 @@ func ListWorktrees(repoPath string) ([]Entry, error) {
 	if err != nil {
 		return nil, err
 	}
-	entries, err := parseListOutput(out)
+	entries, _, err := parseListOutput(out)
 	if err != nil {
 		return nil, err
 	}
@@ -332,10 +332,13 @@ func applyRepoFallback(entries []Entry, repoPath string) {
 	}
 }
 
-// parseListOutput is the pure parsing logic for `wt list --format json`'s
-// stdout, split out from ListWorktrees so it's testable without a real
-// `wt` binary.
-func parseListOutput(out []byte) ([]Entry, error) {
+// parseListOutput is the pure parsing logic for `wt list --format
+// json`'s stdout, split out from ListWorktrees so it's testable without
+// a real `wt` binary. Decoding is per entry: one malformed object skips
+// (and counts) that entry instead of failing the whole repo's output —
+// an all-or-nothing Unmarshal has the same blast radius as the repo
+// erroring, one bad entry blanking every sibling row for a poll.
+func parseListOutput(out []byte) (entries []Entry, skipped int, err error) {
 	// `wt list`'s JSON can carry a stray ANSI escape byte in the
 	// statusline field; strip it so json.Unmarshal never chokes on a raw
 	// control character (statusline itself is never parsed below, but a
@@ -343,20 +346,25 @@ func parseListOutput(out []byte) ([]Entry, error) {
 	clean := strings.ReplaceAll(string(out), "\x1b", "")
 	clean = strings.TrimSpace(clean)
 	if clean == "" {
-		return nil, nil
+		return nil, 0, nil
 	}
 
-	var raw []rawEntry
+	var raw []json.RawMessage
 	if err := json.Unmarshal([]byte(clean), &raw); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	entries := make([]Entry, len(raw))
-	for i, r := range raw {
+	entries = make([]Entry, 0, len(raw))
+	for _, rm := range raw {
+		var r rawEntry
+		if err := json.Unmarshal(rm, &r); err != nil {
+			skipped++
+			continue
+		}
 		wt := r.WorkingTree
 		stale := r.Worktree.State == "prunable"
 		mismatch := r.Worktree.State == "branch_worktree_mismatch"
-		entries[i] = Entry{
+		entries = append(entries, Entry{
 			Owner:       r.Repo.Owner,
 			Repo:        r.Repo.Name,
 			Branch:      r.Branch,
@@ -370,9 +378,9 @@ func parseListOutput(out []byte) ([]Entry, error) {
 			Mismatch:    mismatch,
 			MergeStatus: mergeStatus(r.IsMain, stale, r.MainState),
 			Symbols:     r.Symbols,
-		}
+		})
 	}
-	return entries, nil
+	return entries, skipped, nil
 }
 
 // Parked reports whether the entry counts as parked right now: marked
