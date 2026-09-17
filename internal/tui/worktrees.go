@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/table"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mattn/go-runewidth"
 
 	"github.com/luiul/dashkit/loam"
@@ -394,15 +395,76 @@ func resolveWorktreeCursor(displayed []worktree.Entry, path string, fallback int
 	return clampCursor(cursor, len(displayed))
 }
 
-// applyWorktrees stores a fresh worktree poll, keeps whichever worktree
-// (by path) was previously selected selected, drops any confirmation
-// targets the poll no longer reports (see revalidateConfirm), and
-// rebuilds the table's columns and rows (see redisplay).
+// applyWorktrees stores a fresh worktree poll in which every repo
+// succeeded — the shape applyPollResults reduces to when nothing failed
+// and per-repo identity doesn't matter. Tests drive this shorthand
+// directly; production polls go through applyPollResults (see the
+// pollResultMsg case in Update).
 func (m *Model) applyWorktrees(fresh []worktree.Entry) {
 	previousPath := m.selectedPath() // against the OLD set, before the swap
 	m.worktrees = fresh
 	m.revalidateConfirm(fresh)
 	m.redisplay(previousPath)
+}
+
+// applyPollResults merges one poll's per-repo results into the worktree
+// set: a repo whose poll succeeded replaces its entries wholesale
+// (including down to zero — a worktree removed elsewhere must
+// disappear), while a repo whose poll errored keeps its last-known
+// entries, so one slow repo's rows no longer flicker out and back
+// between polls (issue #7). The window-state maps get the same keep-
+// last-known treatment: they arrive covering only this poll's
+// successful repos, so a failed repo's kept rows would otherwise render
+// "?" for a poll — the same flicker the row merge exists to kill. A
+// repo missing from the results entirely (dropped from the registry
+// between polls) keeps nothing: its rows were only authoritative while
+// it was registered.
+func (m *Model) applyPollResults(msg pollResultMsg) tea.Cmd {
+	previousPath := m.selectedPath() // against the OLD set, before the merge
+
+	failed := map[string]bool{}
+	for _, r := range msg.results {
+		if r.Err != nil {
+			failed[r.RepoPath] = true
+		}
+	}
+
+	lastKnown := map[string][]worktree.Entry{}
+	for _, e := range m.worktrees {
+		lastKnown[e.RepoPath] = append(lastKnown[e.RepoPath], e)
+	}
+	var merged []worktree.Entry
+	for _, r := range msg.results {
+		if r.Err != nil {
+			merged = append(merged, lastKnown[r.RepoPath]...)
+		} else {
+			merged = append(merged, r.Entries...)
+		}
+	}
+	m.worktrees = merged
+
+	if msg.vscode == nil {
+		msg.vscode = map[string]vscodeState{}
+	}
+	if msg.vscodeStrict == nil {
+		msg.vscodeStrict = map[string]bool{}
+	}
+	for _, e := range merged {
+		if !failed[e.RepoPath] {
+			continue
+		}
+		if state, ok := m.vscode[e.Path]; ok {
+			msg.vscode[e.Path] = state
+		}
+		if strict, ok := m.vscodeStrict[e.Path]; ok {
+			msg.vscodeStrict[e.Path] = strict
+		}
+	}
+	m.vscode, m.vscodeStrict = msg.vscode, msg.vscodeStrict
+
+	m.revalidateConfirm(merged)
+	m.redisplay(previousPath)
+	return nil
 }
 
 // selectedPath returns the path of the currently selected row, or "" if

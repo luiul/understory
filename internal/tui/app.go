@@ -94,7 +94,10 @@ func shortenHome(path, home string) string {
 
 type tickMsg struct{}
 type pollResultMsg struct {
-	worktrees []worktree.Entry
+	// results is the poll's per-repo outcome (see worktree.RepoResult):
+	// a repo that errored keeps its last-known rows (applyPollResults)
+	// instead of dropping out of the view for a poll.
+	results []worktree.RepoResult
 	// vscode maps each polled worktree's path to its VS Code window
 	// state (see vscodeStates), captured by the same poll so the column
 	// never renders one poll's worktrees against another poll's window
@@ -119,7 +122,10 @@ type Model struct {
 	// (Entry.IsMain) from displayedWorktrees; see that method's doc for why.
 	showMain bool
 
-	worktrees []worktree.Entry // every known worktree, raw (unsorted) from the last successful poll
+	// worktrees is every known worktree, raw (unsorted) from the last
+	// poll's merge: fresh entries for repos that polled fine, last-known
+	// entries for repos that errored (see applyPollResults).
+	worktrees []worktree.Entry
 	cursor    int              // remembers selection by-path across polls; table.Cursor() is the live ground truth while running
 
 	// pollInFlight is true while a pollCmd is running: tickMsg, FocusMsg,
@@ -130,17 +136,19 @@ type Model struct {
 	// and pollOnce, cleared when the pollResultMsg lands.
 	pollInFlight bool
 
-	// vscode is the last poll's per-path VS Code window states (see
-	// pollResultMsg), read by buildWorktreeRows for the VS Code column.
-	// Nil before the first poll lands; a nil map renders every row as
-	// vscodeUnknown ("?"), the honest answer before any listing has
-	// succeeded.
+	// vscode is the latest known per-path VS Code window states (see
+	// pollResultMsg; applyPollResults keeps last-known states for repos
+	// a poll failed on), read by buildWorktreeRows for the VS Code
+	// column. Nil before the first poll lands; a nil map renders every
+	// row as vscodeUnknown ("?"), the honest answer before any listing
+	// has succeeded.
 	vscode map[string]vscodeState
-	// vscodeStrict is the last poll's per-path strict window answers
-	// (see pollResultMsg), read by the remove prompts' open-window
-	// warning (openWindowNote). Nil before the first poll lands; a nil
-	// map warns about nothing, the same "can't tell, stay silent" rule
-	// the column's vscodeUnknown follows.
+	// vscodeStrict is the latest known per-path strict window answers
+	// (see pollResultMsg, same keep-last-known merge as vscode), read by
+	// the remove prompts' open-window warning (openWindowNote). Nil
+	// before the first poll lands; a nil map warns about nothing, the
+	// same "can't tell, stay silent" rule the column's vscodeUnknown
+	// follows.
 	vscodeStrict map[string]bool
 
 	table table.Model
@@ -254,13 +262,19 @@ func (m *Model) pollOnce() tea.Cmd {
 
 func pollCmd() tea.Cmd {
 	return func() tea.Msg {
-		entries := worktree.ListAll(worktree.KnownRepoPaths())
+		results := worktree.ListAll(worktree.KnownRepoPaths())
 		// One window snapshot per poll, shared across every row's query
 		// (see mycelium.SnapshotVSCode): one osascript listing of the
-		// window titles, and git work-tree lookups are memoized across rows.
+		// window titles, and git work-tree lookups are memoized across
+		// rows. The snapshot covers this poll's successful repos only;
+		// applyPollResults keeps last-known states for the rest.
+		var entries []worktree.Entry
+		for _, r := range results {
+			entries = append(entries, r.Entries...)
+		}
 		snap := snapshotVSCode()
 		return pollResultMsg{
-			worktrees:    entries,
+			results:      results,
 			vscode:       vscodeStates(entries, snap),
 			vscodeStrict: vscodeStrictStates(entries, snap),
 		}
@@ -560,10 +574,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case pollResultMsg:
 		m.pollInFlight = false
-		m.vscode = msg.vscode
-		m.vscodeStrict = msg.vscodeStrict
-		m.applyWorktrees(msg.worktrees)
-		return m, nil
+		return m, m.applyPollResults(msg)
 
 	case openResultMsg:
 		return m, m.notify(msg.result.Message, !msg.result.OK)

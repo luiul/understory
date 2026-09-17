@@ -264,8 +264,8 @@ type rawEntry struct {
 
 // ListWorktrees returns every worktree of the repo rooted at repoPath, or
 // an error if `wt` isn't installed, repoPath isn't `wt`-managed, or its
-// output couldn't be parsed. Callers (ListAll) are expected to skip a repo
-// that errors rather than fail the whole poll over it.
+// output couldn't be parsed. ListAll reports that error per repo (see
+// RepoResult) rather than failing the whole poll over it.
 func ListWorktrees(repoPath string) ([]Entry, error) {
 	bin, ok := binaryPath()
 	if !ok {
@@ -458,18 +458,33 @@ func mergeStatus(isMain, stale bool, mainState string) string {
 	}
 }
 
-// ListAll returns every worktree of every repo in repoPaths, run with
-// bounded concurrency (see maxConcurrentListCalls). A repo whose
-// ListWorktrees call errors (not `wt`-managed, deleted mid-poll, `wt`
-// itself missing) is silently skipped rather than failing the whole call,
-// a graceful-degradation pattern: one bad source doesn't blank the view.
-func ListAll(repoPaths []string) []Entry {
+// RepoResult is one repo's outcome of a ListAll poll: its worktree
+// entries (possibly zero) when its `wt list` call succeeded, or the
+// error it failed with (not `wt`-managed, deleted mid-poll, timed out).
+// Reporting per repo instead of flattening lets the caller keep a
+// failed repo's last-known rows rather than silently dropping them for
+// a poll (issue #7: one slow repo crossing its timeout used to make its
+// worktrees vanish and come back between polls).
+type RepoResult struct {
+	RepoPath string
+	Entries  []Entry
+	Err      error
+}
+
+// ListAll polls every repo in repoPaths with bounded concurrency (see
+// maxConcurrentListCalls) and returns one RepoResult per repo, in the
+// order repoPaths gave them (deduped). A repo whose ListWorktrees call
+// errors comes back with Err set and no Entries rather than failing the
+// whole call, a graceful-degradation pattern: one bad source doesn't
+// blank the view. A nil return means nothing was polled at all (`wt`
+// itself missing, or no repos known).
+func ListAll(repoPaths []string) []RepoResult {
 	if !Available() || len(repoPaths) == 0 {
 		return nil
 	}
 
 	unique := dedupe(repoPaths)
-	results := make([][]Entry, len(unique))
+	results := make([]RepoResult, len(unique))
 
 	sem := make(chan struct{}, maxConcurrentListCalls)
 	var wg sync.WaitGroup
@@ -479,18 +494,12 @@ func ListAll(repoPaths []string) []Entry {
 		go func(i int, repo string) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			if entries, err := ListWorktrees(repo); err == nil {
-				results[i] = entries
-			}
+			entries, err := ListWorktrees(repo)
+			results[i] = RepoResult{RepoPath: repo, Entries: entries, Err: err}
 		}(i, repo)
 	}
 	wg.Wait()
-
-	var all []Entry
-	for _, r := range results {
-		all = append(all, r...)
-	}
-	return all
+	return results
 }
 
 func dedupe(paths []string) []string {
