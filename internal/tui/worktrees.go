@@ -403,6 +403,8 @@ func resolveWorktreeCursor(displayed []worktree.Entry, path string, fallback int
 func (m *Model) applyWorktrees(fresh []worktree.Entry) {
 	previousPath := m.selectedPath() // against the OLD set, before the swap
 	m.worktrees = fresh
+	m.pollsLanded++
+	m.pollFailures = 0
 	m.revalidateConfirm(fresh)
 	m.redisplay(previousPath)
 }
@@ -462,9 +464,60 @@ func (m *Model) applyPollResults(msg pollResultMsg) tea.Cmd {
 	}
 	m.vscode, m.vscodeStrict = msg.vscode, msg.vscodeStrict
 
+	prevFailures := m.pollFailures
+	m.pollFailures = len(failed)
 	m.revalidateConfirm(merged)
 	m.redisplay(previousPath)
+	// Notify on the 0→N transition only: repos staying unreachable are
+	// already visible in the summary line's suffix on every render, so
+	// re-notifying every poll would just drown the status line.
+	if prevFailures == 0 && m.pollFailures > 0 {
+		return m.notify(repoCountLabel(m.pollFailures)+" timed out or errored; keeping last-known rows", true)
+	}
 	return nil
+}
+
+// repoCountLabel renders "1 repo" / "N repos" for the poll-health
+// messages (the placeholder, the summary line's unreachable suffix, the
+// 0→N transition notification).
+func repoCountLabel(n int) string {
+	if n == 1 {
+		return "1 repo"
+	}
+	return fmt.Sprintf("%d repos", n)
+}
+
+// placeholder is the empty table's message, honest about WHY it's empty
+// (issue #7: the view used to claim "no known worktrees" for the whole
+// first poll's duration, and again whenever every repo's poll timed out
+// in the same cycle): the first poll still in flight ("loading
+// worktrees…"), the last poll failed for one or more repos and there is
+// nothing — fresh or kept — to show ("couldn't poll…"), or the poll
+// genuinely found nothing (noWorktreesMessage). An active filter's own
+// no-match message (see buildWorktreeRows) wins over all of these.
+func (m Model) placeholder() string {
+	if m.pollsLanded == 0 {
+		return "loading worktrees…"
+	}
+	if m.pollFailures > 0 && len(m.worktrees) == 0 {
+		return fmt.Sprintf("couldn't poll worktrees (%s timed out or errored); r retries", repoCountLabel(m.pollFailures))
+	}
+	return noWorktreesMessage()
+}
+
+// summaryLine is the header's one-line worktree breakdown
+// (worktreeSummaryLine over the displayed set), plus the poll-health
+// caveat while any repo is unreachable: a failed repo's rows are
+// last-known (see applyPollResults), and the summary says so.
+func (m Model) summaryLine() string {
+	summary := worktreeSummaryLine(m.displayedWorktrees())
+	if summary == "" {
+		return ""
+	}
+	if m.pollFailures > 0 {
+		summary += subtleStyle.Render(" · " + repoCountLabel(m.pollFailures) + " unreachable")
+	}
+	return summary
 }
 
 // selectedPath returns the path of the currently selected row, or "" if
@@ -504,7 +557,7 @@ func (m *Model) redisplay(previousPath string) {
 	// value, and the filter changes the displayed set on every
 	// keystroke — sizing off it would resize the table mid-query.
 	m.table.SetColumns(worktreeColumns(m.width, m.visibleWorktrees(), m.colOverrides))
-	m.table.SetRows(buildWorktreeRows(newDisplayed, m.cursor, m.home, time.Now(), m.vscode, m.filterQuery))
+	m.table.SetRows(buildWorktreeRows(newDisplayed, m.cursor, m.home, time.Now(), m.vscode, m.filterQuery, m.placeholder()))
 	m.table.SetCursor(m.cursor)
 }
 
@@ -561,9 +614,11 @@ func vscodeCell(state vscodeState) string {
 // with loam.Sentinel (see loam pkg doc) so colorize.go's
 // colorizeRows knows to highlight that row's whole line; there's no
 // dedicated cursor column/glyph to place it in any more, now that the
-// row highlight itself is the selection indicator. vscode carries the
-// latest poll's per-path VS Code window states (see vscodeStates); a
-// missing entry renders as vscodeUnknown.
+// row highlight itself is the selection indicator. placeholder is the
+// message the empty table's single row shows (see Model.placeholder for
+// which message and why). vscode carries the latest known per-path VS
+// Code window states (see vscodeStates and applyPollResults); a missing
+// entry renders as vscodeUnknown.
 //
 // The Repo cell is only printed on the first row of each repo's block:
 // sortWorktrees already guarantees every worktree of the same repo is
@@ -579,7 +634,7 @@ func vscodeCell(state vscodeState) string {
 // the same two plain-word signals coppice's own worktree table shows:
 // whether the working tree itself is dirty/clean/stale, and separately
 // whether the branch has been merged into main yet.
-func buildWorktreeRows(worktrees []worktree.Entry, cursor int, home string, now time.Time, vscode map[string]vscodeState, filterQuery string) []table.Row {
+func buildWorktreeRows(worktrees []worktree.Entry, cursor int, home string, now time.Time, vscode map[string]vscodeState, filterQuery, placeholder string) []table.Row {
 	if len(worktrees) == 0 {
 		// An active filter with zero matches says so (and how to back
 		// out) rather than claiming there are no worktrees at all — the
@@ -588,7 +643,7 @@ func buildWorktreeRows(worktrees []worktree.Entry, cursor int, home string, now 
 		if filterQuery != "" {
 			return []table.Row{{"", "", "", "", "", "", fmt.Sprintf("no worktrees match filter %q (esc clears)", filterQuery)}}
 		}
-		return []table.Row{{"", "", "", "", "", "", noWorktreesMessage()}}
+		return []table.Row{{"", "", "", "", "", "", placeholder}}
 	}
 
 	rows := make([]table.Row, len(worktrees))

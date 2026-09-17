@@ -135,6 +135,16 @@ type Model struct {
 	// repos past their timeout (issue #7). Set by New (Init's first poll)
 	// and pollOnce, cleared when the pollResultMsg lands.
 	pollInFlight bool
+	// pollsLanded counts completed polls: zero means the first poll is
+	// still in flight, which the placeholder renders as "loading
+	// worktrees…" rather than the old "no known worktrees" claim (issue
+	// #7: it showed for the whole first-poll duration, 5-11s+).
+	pollsLanded int
+	// pollFailures is how many repos the last poll failed on (see
+	// applyPollResults): their rows are last-known, and the placeholder,
+	// the summary line's unreachable suffix, and the one-time transition
+	// notification all read this.
+	pollFailures int
 
 	// vscode is the latest known per-path VS Code window states (see
 	// pollResultMsg; applyPollResults keeps last-known states for repos
@@ -574,6 +584,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case pollResultMsg:
 		m.pollInFlight = false
+		m.pollsLanded++
 		return m, m.applyPollResults(msg)
 
 	case openResultMsg:
@@ -663,7 +674,7 @@ func clampCursor(idx, n int) int {
 // waiting for the next poll.
 func (m *Model) refreshCursorMarker() {
 	m.cursor = clampCursor(m.table.Cursor(), len(m.displayedWorktrees()))
-	m.table.SetRows(buildWorktreeRows(m.displayedWorktrees(), m.cursor, m.home, time.Now(), m.vscode, m.filterQuery))
+	m.table.SetRows(buildWorktreeRows(m.displayedWorktrees(), m.cursor, m.home, time.Now(), m.vscode, m.filterQuery, m.placeholder()))
 }
 
 // resize rebuilds columns (Path's width depends on m.width) and rows for
@@ -678,7 +689,7 @@ func (m *Model) resize() {
 	// match panics if the two are ever briefly out of sync mid-update.
 	m.table.SetRows(nil)
 	m.table.SetColumns(worktreeColumns(m.width, m.visibleWorktrees(), m.colOverrides))
-	m.table.SetRows(buildWorktreeRows(m.displayedWorktrees(), cursor, m.home, time.Now(), m.vscode, m.filterQuery))
+	m.table.SetRows(buildWorktreeRows(m.displayedWorktrees(), cursor, m.home, time.Now(), m.vscode, m.filterQuery, m.placeholder()))
 	m.table.SetCursor(cursor)
 }
 
@@ -695,7 +706,7 @@ func (m *Model) resize() {
 func (m Model) renderHeader() (text string, tableOriginY int) {
 	text = titleStyle.Render("understory") + subtleStyle.Render(" — worktrees on this machine")
 	lines := 1
-	if summary := worktreeSummaryLine(m.displayedWorktrees()); summary != "" {
+	if summary := m.summaryLine(); summary != "" {
 		text += "\n" + summary
 		lines++
 	}
