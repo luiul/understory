@@ -29,9 +29,20 @@ import (
 	"time"
 )
 
-// defaultTimeout bounds one `wt list` call. `wt list` runs several git
-// subprocesses per worktree it reports on, and a repo with many
-// worktrees can legitimately take a few seconds.
+// listTimeout bounds one `wt list` call. `wt list` runs several git
+// subprocesses per worktree it reports on, and ListAll's 8-way
+// concurrency inflates per-repo durations another 3-5x on top of that
+// (8-11s measured on a quiet machine, see issue #7), so the old 10s
+// bound killed slow-but-healthy polls and their rows silently vanished
+// from the view while `cop list` (no timeout) kept showing them. It's a
+// var, not a const, so tests can swap in a short bound, the same seam
+// pattern as the tui package's openVSCode.
+var listTimeout = 60 * time.Second
+
+// defaultTimeout bounds the cheap one-off git subprocesses (rev-parse,
+// config --get-regexp, park/unpark writes): each answers in
+// milliseconds on a healthy machine, so 10s is already generous. `wt
+// list` has its own, much larger listTimeout.
 const defaultTimeout = 10 * time.Second
 
 // removeTimeout bounds one removal. `wt remove` runs the repo's
@@ -261,7 +272,7 @@ func ListWorktrees(repoPath string) ([]Entry, error) {
 		return nil, errNotInstalled
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), listTimeout)
 	defer cancel()
 	args := []string{"-C", repoPath, "--config-set", "list.json-schema=1", "list", "--format", "json"}
 	out, err := exec.CommandContext(ctx, bin, args...).Output()
