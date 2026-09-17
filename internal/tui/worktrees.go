@@ -342,10 +342,14 @@ func (m Model) visibleWorktrees() []worktree.Entry {
 // displayedWorktrees is the view's current row set: visibleWorktrees,
 // plus the fuzzy text filter (filterQuery, see
 // github.com/luiul/dashkit/sieve) while one is applied. m.worktrees
-// itself always holds the full polled set, so polls, the summary line's
-// counts, and the confirmation prompts' revalidation never see the
-// filter at all; only what renders and what the cursor can land on is
-// filtered.
+// itself always holds the full polled set, so polls and the
+// confirmation prompts' revalidation never see the filter; what renders
+// and what the cursor can land on is filtered, and the summary line's
+// counts follow the displayed set too (see summaryLine) — a filtered
+// view gets filtered counts, and main-hiding stays visible there via
+// the "(+N main hidden)" suffix so the total stays comparable with
+// `cop list`. Only column sizing deliberately looks past the filter
+// (see visibleWorktrees).
 func (m Model) displayedWorktrees() []worktree.Entry {
 	visible := m.visibleWorktrees()
 	if m.filterQuery == "" {
@@ -506,13 +510,27 @@ func (m Model) placeholder() string {
 }
 
 // summaryLine is the header's one-line worktree breakdown
-// (worktreeSummaryLine over the displayed set), plus the poll-health
-// caveat while any repo is unreachable: a failed repo's rows are
-// last-known (see applyPollResults), and the summary says so.
+// (worktreeSummaryLine over the displayed set), plus the two caveats
+// that keep its count honest against what the user can list elsewhere:
+// "(+N main hidden)" while main worktrees are hidden (see
+// visibleWorktrees), so the total stays comparable with `cop list`'s;
+// and "N repos unreachable" while any repo's poll is failing, since a
+// failed repo's rows (and counts) are last-known (see applyPollResults).
 func (m Model) summaryLine() string {
 	summary := worktreeSummaryLine(m.displayedWorktrees())
 	if summary == "" {
 		return ""
+	}
+	if !m.showMain {
+		mains := 0
+		for _, w := range m.worktrees {
+			if w.IsMain {
+				mains++
+			}
+		}
+		if mains > 0 {
+			summary += subtleStyle.Render(fmt.Sprintf(" · (+%d main hidden)", mains))
+		}
 	}
 	if m.pollFailures > 0 {
 		summary += subtleStyle.Render(" · " + repoCountLabel(m.pollFailures) + " unreachable")
