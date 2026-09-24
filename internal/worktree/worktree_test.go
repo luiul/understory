@@ -525,3 +525,47 @@ func TestParkAndUnparkRoundTrip(t *testing.T) {
 		t.Fatalf("Unpark without a mark: %v", err)
 	}
 }
+
+func TestStreamAllDeliversResultsAsTheyLandAndClosesTheChannel(t *testing.T) {
+	writeFakeWt(t)
+	// The slow repo's delivery time is the timeout's kill, so the
+	// ordering assertion's margin is (timeout − fast shim's spawn
+	// overhead): 2s proved too thin on a loaded machine (the fast shim
+	// pays ~0.7s of spawn overhead, multiplied under -race and parallel
+	// test load), 4s keeps the fast repo safely ahead while the 8s
+	// elapsed guard still catches a never-killed slow repo (the shim
+	// sleeps 10s).
+	old := listTimeout
+	listTimeout = 4 * time.Second
+	t.Cleanup(func() { listTimeout = old })
+
+	// Registry order puts the slow repo first: a barrier (ListAll) would
+	// hold the fast repo's result back behind it, the stream must not.
+	ch := StreamAll([]string{"/repo/slow", "/repo/fast"})
+	if ch == nil {
+		t.Fatal("want a channel when wt is on PATH and repos are given")
+	}
+
+	var order []string
+	start := time.Now()
+	for r := range ch {
+		order = append(order, r.RepoPath)
+	}
+	elapsed := time.Since(start)
+
+	if len(order) != 2 {
+		t.Fatalf("got %d results (%v), want one per repo", len(order), order)
+	}
+	if order[0] != "/repo/fast" {
+		t.Fatalf("got order %v, want the fast repo delivered first (completion order, not registry order)", order)
+	}
+	if elapsed >= 8*time.Second {
+		t.Fatalf("StreamAll took %s, want the slow repo killed at the 2s timeout, not waited out", elapsed)
+	}
+}
+
+func TestStreamAllReturnsANilChannelWhenNothingIsPolled(t *testing.T) {
+	if ch := StreamAll(nil); ch != nil {
+		t.Fatalf("got %v, want a nil channel for no repo paths", ch)
+	}
+}

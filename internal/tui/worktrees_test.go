@@ -889,11 +889,13 @@ func TestWorktreeSummaryLineParkedWinsOverDirty(t *testing.T) {
 
 // --- per-repo poll merge (issue #7) -------------------------------------
 //
-// applyPollResults is the production poll path (see the pollResultMsg
-// case in Update): a repo whose poll succeeded replaces its entries
-// wholesale, a repo whose poll errored keeps its last-known rows, and
-// the poll-health counters drive the placeholder and the summary line's
-// suffix.
+// applyPollResults is the batched poll path (kept for one-shot callers;
+// the production path is the streamed pollStartedMsg → repoResultMsg →
+// pollDoneMsg sequence, covered in stream_test.go, and both share the
+// same mergeRepoRows/finishPoll primitives): a repo whose poll
+// succeeded replaces its entries wholesale, a repo whose poll errored
+// keeps its last-known rows, and the poll-health counters drive the
+// placeholder and the summary line's suffix.
 
 // okResult builds the RepoResult of a repo whose poll succeeded.
 func okResult(repoPath string, entries ...worktree.Entry) worktree.RepoResult {

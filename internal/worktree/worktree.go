@@ -169,12 +169,15 @@ const (
 )
 
 // KnownRepoPaths returns every repo understory knows to look for
-// worktrees in: every path listed in the shared `~/.cache/wt/known-repos`
-// registry that still exists on disk, plus the repo containing the
-// current working directory, if any and not already listed. That
-// fallback matters because a repo understory itself is run from may
-// never have gone through `wt` or `coppice`, and requiring registration
-// first would leave the view empty by default for it.
+// worktrees in: the repo containing the current working directory FIRST
+// (StreamAll's bounded concurrency starts polls in slice order, and the
+// repo the user is standing in is the most likely reason they opened
+// the dashboard, so it must never queue behind the registry's tail),
+// then every path listed in the shared `~/.cache/wt/known-repos`
+// registry that still exists on disk. The cwd fallback also matters
+// because a repo understory itself is run from may never have gone
+// through `wt` or `coppice`, and requiring registration first would
+// leave the view empty by default for it.
 func KnownRepoPaths() []string {
 	seen := map[string]bool{}
 	var repos []string
@@ -191,17 +194,17 @@ func KnownRepoPaths() []string {
 		repos = append(repos, path)
 	}
 
+	if cwd, err := os.Getwd(); err == nil {
+		if root, ok := repoRoot(cwd); ok {
+			add(root)
+		}
+	}
+
 	if path, ok := registryPath(); ok {
 		if data, err := os.ReadFile(path); err == nil {
 			for _, line := range strings.Split(string(data), "\n") {
 				add(line)
 			}
-		}
-	}
-
-	if cwd, err := os.Getwd(); err == nil {
-		if root, ok := repoRoot(cwd); ok {
-			add(root)
 		}
 	}
 
@@ -508,37 +511,62 @@ type RepoResult struct {
 	Err      error
 }
 
-// ListAll polls every repo in repoPaths with bounded concurrency (see
-// maxConcurrentListCalls) and returns one RepoResult per repo, in the
-// order repoPaths gave them (deduped). A repo whose ListWorktrees call
-// errors comes back with Err set and no Entries rather than failing the
-// whole call, a graceful-degradation pattern: one bad source doesn't
-// blank the view. A nil return means nothing was polled at all (`wt`
-// itself missing, or no repos known).
-func ListAll(repoPaths []string) []RepoResult {
+// StreamAll polls every repo in repoPaths with bounded concurrency (see
+// maxConcurrentListCalls) and sends each repo's RepoResult on the
+// returned channel the moment it lands — fastest repos first, NOT
+// registry order — closing the channel once the last repo reports. A
+// repo whose ListWorktrees call errors comes back with Err set and no
+// Entries rather than failing the whole poll, a graceful-degradation
+// pattern: one bad source doesn't blank the view. A nil channel means
+// nothing was polled at all (`wt` itself missing, or no repos known).
+//
+// The TUI consumes this directly (issue #8): the old barrier shape made
+// the first paint wait for the SLOWEST repo (~40s on a real registry),
+// while streaming lets every repo render as it arrives.
+func StreamAll(repoPaths []string) <-chan RepoResult {
 	if !Available() || len(repoPaths) == 0 {
 		return nil
 	}
 
-	unique := dedupe(repoPaths)
-	results := make([]RepoResult, len(unique))
-
+	out := make(chan RepoResult)
 	sem := make(chan struct{}, maxConcurrentListCalls)
 	var wg sync.WaitGroup
-	for i, repo := range unique {
+	for _, repo := range dedupe(repoPaths) {
 		wg.Add(1)
-		sem <- struct{}{}
-		go func(i int, repo string) {
+		go func(repo string) {
 			defer wg.Done()
+			sem <- struct{}{}
 			defer func() { <-sem }()
 			start := time.Now()
 			entries, skipped, err := listWorktrees(repo)
 			debugf("%s repo=%s duration=%s entries=%d skipped=%d err=%v",
 				start.Format(time.RFC3339), repo, time.Since(start).Round(time.Millisecond), len(entries), skipped, err)
-			results[i] = RepoResult{RepoPath: repo, Entries: entries, Err: err}
-		}(i, repo)
+			out <- RepoResult{RepoPath: repo, Entries: entries, Err: err}
+		}(repo)
 	}
-	wg.Wait()
+	go func() { wg.Wait(); close(out) }()
+	return out
+}
+
+// ListAll collects StreamAll's channel into one RepoResult per repo, in
+// the order repoPaths gave them (deduped) — the barrier shape, kept for
+// callers (and tests) that genuinely need every result at once. A nil
+// return means nothing was polled at all, same as StreamAll's nil
+// channel.
+func ListAll(repoPaths []string) []RepoResult {
+	ch := StreamAll(repoPaths)
+	if ch == nil {
+		return nil
+	}
+	byRepo := map[string]RepoResult{}
+	for r := range ch {
+		byRepo[r.RepoPath] = r
+	}
+	unique := dedupe(repoPaths)
+	results := make([]RepoResult, len(unique))
+	for i, repo := range unique {
+		results[i] = byRepo[repo]
+	}
 	return results
 }
 

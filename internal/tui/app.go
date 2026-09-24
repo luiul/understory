@@ -102,6 +102,33 @@ func shortenHome(path, home string) string {
 }
 
 type tickMsg struct{}
+
+// pollStartedMsg opens a streaming poll: results is StreamAll's
+// channel, handed to waitRepoResult so each repo renders the moment it
+// lands (issue #8) instead of the whole view waiting for the slowest
+// repo behind one barrier. The window snapshot for the same poll
+// arrives on its own message (snapshotMsg), captured concurrently.
+type pollStartedMsg struct{ results <-chan worktree.RepoResult }
+
+// repoResultMsg is one repo's streamed poll result; next is the same
+// channel, for the follow-up wait (each result re-arms exactly one
+// receive, so the stream stays sequential and nothing is dropped).
+type repoResultMsg struct {
+	result worktree.RepoResult
+	next   <-chan worktree.RepoResult
+}
+
+// pollDoneMsg closes a streaming poll: every repo has reported (or
+// there was nothing to poll), and finishPoll can prune, count, cache,
+// and notify.
+type pollDoneMsg struct{}
+
+// snapshotMsg delivers the poll's VS Code window snapshot, captured
+// concurrently with the repo fan-out (see snapshotCmd). It can land
+// before OR after any repoResultMsg; both orderings are handled
+// (applySnapToPolledRepos vs applyStreamedRepo).
+type snapshotMsg struct{ snap vscodeSnapshot }
+
 type pollResultMsg struct {
 	// results is the poll's per-repo outcome (see worktree.RepoResult):
 	// a repo that errored keeps its last-known rows (applyPollResults)
@@ -135,15 +162,20 @@ type Model struct {
 	// poll's merge: fresh entries for repos that polled fine, last-known
 	// entries for repos that errored (see applyPollResults).
 	worktrees []worktree.Entry
-	cursor    int              // remembers selection by-path across polls; table.Cursor() is the live ground truth while running
+	cursor    int // remembers selection by-path across polls; table.Cursor() is the live ground truth while running
 
-	// pollInFlight is true while a pollCmd is running: tickMsg, FocusMsg,
-	// r, and the post-mutation refreshes all ask for a poll, and without a
-	// guard they pile a second 8-way `wt list` subprocess fan-out on top
-	// of the one already running — exactly the contention that pushes
-	// repos past their timeout (issue #7). Set by New (Init's first poll)
-	// and pollOnce, cleared when the pollResultMsg lands.
+	// pollInFlight is true while a poll is running: tickMsg, FocusMsg,
+	// r, and the post-mutation refreshes all ask for a poll, and without
+	// a guard they pile a second 8-way `wt list` subprocess fan-out on
+	// top of the one already running — exactly the contention that
+	// pushes repos past their timeout (issue #7). Set by New (Init's
+	// first poll) and pollOnce, cleared when the pollDoneMsg (or the
+	// batch-path pollResultMsg) lands.
 	pollInFlight bool
+	// poll is the live streaming poll's bookkeeping (see livePoll), nil
+	// whenever no streamed poll is between its pollStartedMsg and
+	// pollDoneMsg.
+	poll *livePoll
 	// pollsLanded counts completed polls: zero means the first poll is
 	// still in flight, which the placeholder renders as "loading
 	// worktrees…" rather than the old "no known worktrees" claim (issue
@@ -224,6 +256,25 @@ type Model struct {
 	quitting      bool
 }
 
+// livePoll is a streaming poll's per-poll bookkeeping, accumulated
+// between pollStartedMsg and pollDoneMsg: which repos have reported at
+// all (polled — pollDone prunes rows of repos that dropped out of the
+// registry entirely), which reported successfully (okRepos — a
+// snapshot landing late applies to exactly these), how many failed
+// (committed to m.pollFailures at done), and the window snapshot once
+// it lands (nil until then, so early repo results keep last-known
+// window states).
+type livePoll struct {
+	snap     vscodeSnapshot
+	okRepos  map[string]bool
+	polled   map[string]bool
+	failures int
+}
+
+func newLivePoll() *livePoll {
+	return &livePoll{okRepos: map[string]bool{}, polled: map[string]bool{}}
+}
+
 // New builds the dashboard model, polling at interval. showMain controls
 // whether each repo's main worktree (Entry.IsMain) is included in the
 // view; see displayedWorktrees' doc.
@@ -245,7 +296,7 @@ func New(interval time.Duration, showMain bool) Model {
 	fi := textinput.New()
 	fi.Prompt = "filter> "
 
-	return Model{
+	m := Model{
 		interval:     interval,
 		home:         homeDir(),
 		showMain:     showMain,
@@ -254,49 +305,82 @@ func New(interval time.Duration, showMain bool) Model {
 		filterInput:  fi,
 		pollInFlight: true, // Init always starts the first poll; Init's value receiver can't mark it, so New does
 	}
+	// Warm start (issue #8): seed the last completed poll's merged view
+	// so the table renders immediately instead of sitting on "loading
+	// worktrees…" for the whole first poll. The summary line marks the
+	// view "refreshing…" until that poll lands (see summaryLine).
+	if c := loadPollCache(); c != nil {
+		m.worktrees = c.Entries
+		m.vscode = c.VSCode
+		m.vscodeStrict = c.VSCodeStrict
+	}
+	return m
 }
 
-// Init kicks off the first poll and the recurring timer.
+// Init kicks off the first poll, its window snapshot, and the
+// recurring timer.
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(pollCmd(), tickCmd(m.interval))
+	return tea.Batch(pollCmd(), snapshotCmd(), tickCmd(m.interval))
 }
 
 func tickCmd(interval time.Duration) tea.Cmd {
 	return tea.Tick(interval, func(time.Time) tea.Msg { return tickMsg{} })
 }
 
-// pollOnce is the only way Update starts a poll: it returns pollCmd()
-// and marks the poll in flight, or nil when one is already running —
-// its result lands soon enough either way, and piling on a second
-// fan-out doubles the contention that causes poll timeouts. Skipping
-// silently is fine even for an explicit r: the in-flight poll's result
-// is by definition fresher than whatever the user is looking at.
+// pollOnce is the only way Update starts a poll: it returns the poll
+// and snapshot commands and marks the poll in flight, or nil when one
+// is already running — its results land soon enough either way, and
+// piling on a second fan-out doubles the contention that causes poll
+// timeouts. Skipping silently is fine even for an explicit r: the
+// in-flight poll's result is by definition fresher than whatever the
+// user is looking at.
 func (m *Model) pollOnce() tea.Cmd {
 	if m.pollInFlight {
 		return nil
 	}
 	m.pollInFlight = true
-	return pollCmd()
+	return tea.Batch(pollCmd(), snapshotCmd())
 }
 
+// pollCmd starts one streaming poll over every known repo. The returned
+// channel delivers each repo's result as it lands (see
+// worktree.StreamAll); waitRepoResult turns the deliveries into
+// messages.
 func pollCmd() tea.Cmd {
 	return func() tea.Msg {
-		results := worktree.ListAll(worktree.KnownRepoPaths())
-		// One window snapshot per poll, shared across every row's query
-		// (see mycelium.SnapshotVSCode): one osascript listing of the
-		// window titles, and git work-tree lookups are memoized across
-		// rows. The snapshot covers this poll's successful repos only;
-		// applyPollResults keeps last-known states for the rest.
-		var entries []worktree.Entry
-		for _, r := range results {
-			entries = append(entries, r.Entries...)
+		return pollStartedMsg{results: worktree.StreamAll(worktree.KnownRepoPaths())}
+	}
+}
+
+// snapshotCmd captures the poll's VS Code window snapshot (see
+// mycelium.SnapshotVSCode): one osascript listing of the window titles,
+// with git work-tree lookups memoized across rows. It runs concurrently
+// with the poll's repo fan-out (tea.Batch) rather than sequentially
+// after it like the old barrier pollCmd did — the capture doesn't
+// depend on any repo result, only the per-entry mapping does, so its
+// latency comes off the critical path (issue #8). The snapshot covers
+// this poll's successful repos only; failed repos keep last-known
+// states.
+func snapshotCmd() tea.Cmd {
+	return func() tea.Msg {
+		return snapshotMsg{snap: snapshotVSCode()}
+	}
+}
+
+// waitRepoResult turns the next streamed repo result into a message, or
+// pollDoneMsg once the channel closes (every repo reported). A nil
+// channel (nothing polled at all, see worktree.StreamAll) is an
+// immediately-done poll — receiving from it would block forever.
+func waitRepoResult(ch <-chan worktree.RepoResult) tea.Cmd {
+	if ch == nil {
+		return func() tea.Msg { return pollDoneMsg{} }
+	}
+	return func() tea.Msg {
+		r, ok := <-ch
+		if !ok {
+			return pollDoneMsg{}
 		}
-		snap := snapshotVSCode()
-		return pollResultMsg{
-			results:      results,
-			vscode:       vscodeStates(entries, snap),
-			vscodeStrict: vscodeStrictStates(entries, snap),
-		}
+		return repoResultMsg{result: r, next: ch}
 	}
 }
 
@@ -590,6 +674,52 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// is an extra poll on top of the tick chain, which keeps its own
 		// cadence either way.
 		return m, m.pollOnce()
+
+	case pollStartedMsg:
+		// Guarded, not unconditional: the concurrently-batched
+		// snapshotMsg can land first, and it may already have created
+		// m.poll holding the snapshot — wiping that here would lose it.
+		if m.poll == nil {
+			m.poll = newLivePoll()
+		}
+		return m, waitRepoResult(msg.results)
+
+	case repoResultMsg:
+		if m.poll == nil {
+			m.poll = newLivePoll()
+		}
+		m.poll.polled[msg.result.RepoPath] = true
+		if msg.result.Err != nil {
+			m.poll.failures++
+		} else {
+			m.poll.okRepos[msg.result.RepoPath] = true
+		}
+		m.applyStreamedRepo(msg.result, m.poll.snap)
+		return m, waitRepoResult(msg.next)
+
+	case snapshotMsg:
+		// No poll in flight (already done): the snapshot is useless —
+		// window state belongs to the poll it was captured for, and the
+		// next poll captures its own.
+		if !m.pollInFlight {
+			return m, nil
+		}
+		if m.poll == nil {
+			m.poll = newLivePoll()
+		}
+		m.poll.snap = msg.snap
+		m.applySnapToPolledRepos()
+		return m, nil
+
+	case pollDoneMsg:
+		m.pollInFlight = false
+		poll := m.poll
+		m.poll = nil
+		if poll == nil {
+			poll = newLivePoll()
+		}
+		m.pollsLanded++
+		return m, m.finishPoll(poll.failures, poll.polled)
 
 	case pollResultMsg:
 		m.pollInFlight = false

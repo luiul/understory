@@ -5,10 +5,13 @@
 //
 // understory reads the same shared `~/.cache/wt/known-repos` registry
 // `wt` (worktrunk) and coppice already populate, and never writes to the
-// registry itself. The dashboard's only write operations are confirmed
-// worktree removal (x/X/P/M), delegated to `wt remove`/git, and
-// parking/unparking (p), one git config key per branch, the same mark
-// coppice's own `park` writes. For everything else, see
+// registry itself. Its one other read/write state is its own poll cache
+// (~/.cache/understory/poll-cache.json, see internal/tui/cache.go): the
+// last completed poll's merged view, rendered on launch while the first
+// poll streams in (issue #8). The dashboard's only other write
+// operations are confirmed worktree removal (x/X/P/M), delegated to `wt
+// remove`/git, and parking/unparking (p), one git config key per branch,
+// the same mark coppice's own `park` writes. For everything else, see
 // https://worktrunk.dev and https://github.com/luiul/coppice.
 package main
 

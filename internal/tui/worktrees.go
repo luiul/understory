@@ -413,41 +413,158 @@ func (m *Model) applyWorktrees(fresh []worktree.Entry) {
 	m.redisplay(previousPath)
 }
 
-// applyPollResults merges one poll's per-repo results into the worktree
-// set: a repo whose poll succeeded replaces its entries wholesale
-// (including down to zero — a worktree removed elsewhere must
-// disappear), while a repo whose poll errored keeps its last-known
-// entries, so one slow repo's rows no longer flicker out and back
-// between polls (issue #7). The window-state maps get the same keep-
-// last-known treatment: they arrive covering only this poll's
-// successful repos, so a failed repo's kept rows would otherwise render
-// "?" for a poll — the same flicker the row merge exists to kill. A
-// repo missing from the results entirely (dropped from the registry
-// between polls) keeps nothing: its rows were only authoritative while
-// it was registered.
-func (m *Model) applyPollResults(msg pollResultMsg) tea.Cmd {
-	previousPath := m.selectedPath() // against the OLD set, before the merge
+// mergeRepoRows folds one repo's poll outcome into the worktree set: a
+// successful poll replaces that repo's entries wholesale (including
+// down to zero — a worktree removed elsewhere must disappear), while a
+// failed one keeps its last-known entries, so one slow repo's rows no
+// longer flicker out and back between polls (issue #7). Entry order
+// within m.worktrees is NOT preserved (a successful repo's entries move
+// to the back); nothing consumes the set unsorted — visibleWorktrees
+// always goes through sortWorktrees.
+func (m *Model) mergeRepoRows(r worktree.RepoResult) {
+	if r.Err != nil {
+		return // keep last-known
+	}
+	kept := make([]worktree.Entry, 0, len(m.worktrees))
+	for _, e := range m.worktrees {
+		if e.RepoPath != r.RepoPath {
+			kept = append(kept, e)
+		}
+	}
+	m.worktrees = append(kept, r.Entries...)
+}
 
+// applyStreamedRepo folds one streamed repo result into the view
+// (issue #8's progressive half: every repo renders the moment it polls,
+// not when the slowest one does): the row merge (see mergeRepoRows),
+// fresh window states for its entries when this poll's snapshot already
+// arrived (a repo landing BEFORE the snapshot keeps last-known states;
+// applySnapToPolledRepos catches those up when it lands), confirmation
+// revalidation, and a redisplay preserving the current selection.
+func (m *Model) applyStreamedRepo(r worktree.RepoResult, snap vscodeSnapshot) {
+	previousPath := m.selectedPath()
+	m.mergeRepoRows(r)
+	if r.Err == nil && snap != nil {
+		m.applyRepoVSCode(r.Entries, snap)
+	}
+	m.revalidateConfirm(m.worktrees)
+	m.redisplay(previousPath)
+}
+
+// applyRepoVSCode sets fresh window states for one successfully polled
+// set of entries from the poll's snapshot, the same keep-nothing-back
+// answers vscodeStates/vscodeStrictStates compute for the batch path:
+// a failed listing marks every entry vscodeUnknown rather than a wrong
+// "-". States for paths no longer present are NOT pruned here:
+// finishPoll prunes both maps to the current row set at the end of
+// every poll.
+func (m *Model) applyRepoVSCode(entries []worktree.Entry, snap vscodeSnapshot) {
+	if m.vscode == nil {
+		m.vscode = map[string]vscodeState{}
+	}
+	if m.vscodeStrict == nil {
+		m.vscodeStrict = map[string]bool{}
+	}
+	for _, e := range entries {
+		if snap.Err() != nil {
+			m.vscode[e.Path] = vscodeUnknown
+			continue
+		}
+		if snap.IsOpen(e.Path) {
+			m.vscode[e.Path] = vscodeOpen
+		} else {
+			m.vscode[e.Path] = vscodeClosed
+		}
+		m.vscodeStrict[e.Path] = snap.IsOpenOnWorktree(e.Path)
+	}
+}
+
+// applySnapToPolledRepos applies a late-arriving window snapshot to the
+// repos that already landed successfully before it (the common case is
+// the reverse: the snapshot wins the race against every repo and each
+// result applies it as it lands, see applyStreamedRepo). Repos whose
+// poll failed keep last-known states, the same keep-last-known rule the
+// rows follow.
+func (m *Model) applySnapToPolledRepos() {
+	if m.poll == nil || m.poll.snap == nil {
+		return
+	}
+	previousPath := m.selectedPath()
+	var entries []worktree.Entry
+	for _, e := range m.worktrees {
+		if m.poll.okRepos[e.RepoPath] {
+			entries = append(entries, e)
+		}
+	}
+	m.applyRepoVSCode(entries, m.poll.snap)
+	m.redisplay(previousPath)
+}
+
+// finishPoll closes out a poll, streamed or batched: rows of repos that
+// weren't polled at all this cycle are pruned (a repo dropped from the
+// registry mid-poll was only ever authoritative while registered), the
+// window-state maps are pruned to the surviving rows (states for
+// deleted worktrees never linger), the failure count updates, the
+// merged view is cached for the next launch's warm start (issue #8),
+// and the user is notified on the 0→N failure transition only — repos
+// staying unreachable are already visible in the summary line's suffix
+// on every render, so re-notifying every poll would drown the status
+// line.
+func (m *Model) finishPoll(failures int, polled map[string]bool) tea.Cmd {
+	previousPath := m.selectedPath()
+	kept := m.worktrees[:0]
+	for _, e := range m.worktrees {
+		if polled[e.RepoPath] {
+			kept = append(kept, e)
+		}
+	}
+	m.worktrees = kept
+	live := make(map[string]bool, len(kept))
+	for _, e := range kept {
+		live[e.Path] = true
+	}
+	for path := range m.vscode {
+		if !live[path] {
+			delete(m.vscode, path)
+		}
+	}
+	for path := range m.vscodeStrict {
+		if !live[path] {
+			delete(m.vscodeStrict, path)
+		}
+	}
+	prevFailures := m.pollFailures
+	m.pollFailures = failures
+	m.revalidateConfirm(m.worktrees)
+	m.redisplay(previousPath)
+	savePollCache(m.worktrees, m.vscode, m.vscodeStrict)
+	if prevFailures == 0 && m.pollFailures > 0 {
+		return m.notify(repoCountLabel(m.pollFailures)+" timed out or errored; keeping last-known rows", true)
+	}
+	return nil
+}
+
+// applyPollResults merges one batched poll's per-repo results (the
+// pre-streaming shape, kept for tests and one-shot callers; the
+// production poll path is the streamed pollStartedMsg → repoResultMsg
+// → pollDoneMsg sequence in app.go, built from the same primitives).
+// Rows merge per repo exactly as the streamed path does (see
+// mergeRepoRows); the window-state maps arrive computed for the whole
+// poll and swap in wholesale, with last-known states kept for failed
+// repos — they arrive covering only the successful repos, so a failed
+// repo's kept rows would otherwise render "?" for a poll, the same
+// flicker the row merge exists to kill.
+func (m *Model) applyPollResults(msg pollResultMsg) tea.Cmd {
 	failed := map[string]bool{}
+	polled := map[string]bool{}
 	for _, r := range msg.results {
+		polled[r.RepoPath] = true
 		if r.Err != nil {
 			failed[r.RepoPath] = true
+			continue
 		}
+		m.mergeRepoRows(r)
 	}
-
-	lastKnown := map[string][]worktree.Entry{}
-	for _, e := range m.worktrees {
-		lastKnown[e.RepoPath] = append(lastKnown[e.RepoPath], e)
-	}
-	var merged []worktree.Entry
-	for _, r := range msg.results {
-		if r.Err != nil {
-			merged = append(merged, lastKnown[r.RepoPath]...)
-		} else {
-			merged = append(merged, r.Entries...)
-		}
-	}
-	m.worktrees = merged
 
 	if msg.vscode == nil {
 		msg.vscode = map[string]vscodeState{}
@@ -455,7 +572,7 @@ func (m *Model) applyPollResults(msg pollResultMsg) tea.Cmd {
 	if msg.vscodeStrict == nil {
 		msg.vscodeStrict = map[string]bool{}
 	}
-	for _, e := range merged {
+	for _, e := range m.worktrees {
 		if !failed[e.RepoPath] {
 			continue
 		}
@@ -468,17 +585,7 @@ func (m *Model) applyPollResults(msg pollResultMsg) tea.Cmd {
 	}
 	m.vscode, m.vscodeStrict = msg.vscode, msg.vscodeStrict
 
-	prevFailures := m.pollFailures
-	m.pollFailures = len(failed)
-	m.revalidateConfirm(merged)
-	m.redisplay(previousPath)
-	// Notify on the 0→N transition only: repos staying unreachable are
-	// already visible in the summary line's suffix on every render, so
-	// re-notifying every poll would just drown the status line.
-	if prevFailures == 0 && m.pollFailures > 0 {
-		return m.notify(repoCountLabel(m.pollFailures)+" timed out or errored; keeping last-known rows", true)
-	}
-	return nil
+	return m.finishPoll(len(failed), polled)
 }
 
 // repoCountLabel renders "1 repo" / "N repos" for the poll-health
@@ -531,6 +638,13 @@ func (m Model) summaryLine() string {
 		if mains > 0 {
 			summary += subtleStyle.Render(fmt.Sprintf(" · (+%d main hidden)", mains))
 		}
+	}
+	// A warm-started view (see New's cache seed) shows last session's
+	// data while the first poll is still landing; say so. Cold starts
+	// hit this too once the first streamed repo lands mid-poll — equally
+	// true there.
+	if m.pollsLanded == 0 && m.pollInFlight && len(m.worktrees) > 0 {
+		summary += subtleStyle.Render(" · refreshing…")
 	}
 	if m.pollFailures > 0 {
 		summary += subtleStyle.Render(" · " + repoCountLabel(m.pollFailures) + " unreachable")

@@ -223,6 +223,20 @@ flow is creating a worktree in another window (`cop new`, jira-worktree)
 and then switching to understory to check it, and a worktree created
 seconds ago shouldn't be invisible until the next tick.
 
+Startup is stale-while-revalidate (issue
+[#8](https://github.com/luiul/understory/issues/8)). Every `wt list` is
+a subprocess fan-out, so a cold first poll takes seconds to tens of
+seconds. Instead of sitting on "loading worktrees…" for that wait,
+understory renders the last completed poll's merged view from
+`~/.cache/understory/poll-cache.json` immediately (marked
+"refreshing…" until the first poll lands), and the poll then streams in
+repo by repo: each repo's rows update the moment its own `wt list`
+finishes rather than all at once when the slowest one does, with the
+repo you launched from polled first. A worktree removed since the last
+run lingers as a stale row for one poll at most, and the first
+completed poll rewrites the cache. The cache is best-effort: delete it
+and the next launch is simply a cold start.
+
 ## What this deliberately doesn't do
 
 There's no notion of "live" (an agent currently working inside a given
