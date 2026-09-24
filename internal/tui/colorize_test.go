@@ -150,3 +150,69 @@ func TestColorizeRowsHighlightsTheSelectedMismatchRowWithTheSuffixInside(t *test
 		t.Fatalf("got tagged row %q, want the magenta segment %q to survive inside the highlight", lines[2], want)
 	}
 }
+
+func TestColorizeRowsGreysOutTheParkedRowButKeepsTheParkedWordBright(t *testing.T) {
+	withForcedColor(t)
+	tbl := newColorizeTable(
+		table.Row{"luiul/understory", "main", "3d", "clean", "-"},
+		table.Row{"luiul/understory", "feature/done", parkedMarker + "2d", "parked", "merged"},
+	)
+
+	got := colorizeRows(tbl.View(), tbl.Columns(), colWorktree, colMerge)
+	lines := strings.Split(got, "\n")
+
+	dimOpen, _ := loam.StyleSequences(parkedRowStyle)
+	if dimOpen == "" {
+		t.Fatal("StyleSequences returned no escape codes; withForcedColor isn't taking effect")
+	}
+	if strings.Contains(lines[1], dimOpen) {
+		t.Fatalf("got the grey-out on the non-parked row %q, want it left alone", lines[1])
+	}
+	if !strings.HasPrefix(lines[2], dimOpen) {
+		t.Fatalf("got parked row %q, want it greyed out from the start of the line", lines[2])
+	}
+	// The parked word itself stays bright inside the grey (SGR 22 spliced
+	// into its own opening sequence): the one signal a parked row exists
+	// to show, the same exception coppice makes for its own parked label.
+	parkedOpen, _ := loam.StyleSequences(worktreeStatusStyle("parked"))
+	if want := parkedOpen + "\x1b[22m" + "parked"; !strings.Contains(lines[2], want) {
+		t.Fatalf("got parked row %q, want the parked word re-brightened as %q", lines[2], want)
+	}
+	if strings.Contains(got, parkedMarker) {
+		t.Fatalf("got %q, want parkedMarker stripped out of the final output entirely", got)
+	}
+}
+
+func TestColorizeRowsGreysOutASelectedParkedRowWithoutBreakingTheHighlightBand(t *testing.T) {
+	withForcedColor(t)
+	tbl := newColorizeTable(
+		table.Row{"luiul/understory", "main", "3d", "clean", "-"},
+		table.Row{"luiul/understory", "feature/done", cursorSentinel + parkedMarker + "2d", "parked", "merged"},
+	)
+
+	got := colorizeRows(tbl.View(), tbl.Columns(), colWorktree, colMerge)
+	lines := strings.Split(got, "\n")
+
+	dimOpen, _ := loam.StyleSequences(parkedRowStyle)
+	bandOpen, _ := loam.StyleSequences(rowHighlightStyle)
+	parkedOpen, _ := loam.StyleSequences(worktreeStatusStyle("parked"))
+	if dimOpen == "" || bandOpen == "" || parkedOpen == "" {
+		t.Fatal("StyleSequences returned no escape codes; withForcedColor isn't taking effect")
+	}
+	// Greyed out AND carrying the selection band.
+	if !strings.HasPrefix(lines[2], dimOpen) || !strings.Contains(lines[2], bandOpen) {
+		t.Fatalf("got selected parked row %q, want it greyed out and highlighted", lines[2])
+	}
+	// The parked word is bright, and the band keeps flowing behind it
+	// (the band's opener is the last styling still active when the word's
+	// own opener starts, no reset in between) instead of gapping behind
+	// the word.
+	word := strings.Index(lines[2], parkedOpen)
+	if word < 0 || !strings.HasPrefix(lines[2][word:], parkedOpen+"\x1b[22m") {
+		t.Fatalf("got selected parked row %q, want the parked word bright inside the grey-out", lines[2])
+	}
+	before := lines[2][:word]
+	if strings.LastIndex(before, bandOpen) < strings.LastIndex(before, "\x1b[0m") {
+		t.Fatalf("got selected parked row %q, want the highlight band still open at the parked word", lines[2])
+	}
+}

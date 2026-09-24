@@ -192,6 +192,36 @@ func TestBuildWorktreeRowsTagsTheCursorRowsCreatedCell(t *testing.T) {
 	}
 }
 
+func TestBuildWorktreeRowsTagsAParkedRowsCreatedCell(t *testing.T) {
+	parked := wtEntry("/w/parked", "parked", time.Hour)
+	parked.ParkedAt = time.Now() // marked after its last commit: no follow-up since
+
+	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), parked}, 0, "", time.Now(), nil, "", "")
+
+	if strings.Contains(rows[0][colCreated], parkedMarker) {
+		t.Fatalf("got parkedMarker on non-parked row 0's Created cell %q, want it absent", rows[0][colCreated])
+	}
+	if !strings.Contains(rows[1][colCreated], parkedMarker) {
+		t.Fatalf("got %q, want the parked row's Created cell to carry parkedMarker (it's the row greyOutParkedRows greys out)", rows[1][colCreated])
+	}
+}
+
+func TestBuildWorktreeRowsLeavesAStaleParkedRowUntagged(t *testing.T) {
+	// Stale wins over parked (see worktreeStatusLabel): a prunable
+	// worktree renders as a removal candidate, not as set aside, and the
+	// grey-out follows the same precedence coppice's own `not stale and
+	// parked` check does.
+	stale := wtEntry("/w/stale", "stale", time.Hour)
+	stale.Stale = true
+	stale.ParkedAt = time.Now()
+
+	rows := buildWorktreeRows([]worktree.Entry{stale}, 0, "", time.Now(), nil, "", "")
+
+	if strings.Contains(rows[0][colCreated], parkedMarker) {
+		t.Fatalf("got parkedMarker on a stale row's Created cell %q, want it absent (stale wins over parked)", rows[0][colCreated])
+	}
+}
+
 func TestBuildWorktreeRowsBlanksTheRepeatedRepoLabelWithinAGroup(t *testing.T) {
 	// Same repo (acme/widgets) back to back: only the first row should
 	// carry the label, so the group reads as one block instead of

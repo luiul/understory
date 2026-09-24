@@ -23,11 +23,14 @@ var worktreeStatusStyles = map[string]lipgloss.Style{
 	"clean": lipgloss.NewStyle().Foreground(lipgloss.Color("240")),          // nothing to do here
 	// task-complete and set aside for follow-up: a calm but legible blue,
 	// the one bright hue no other word on screen uses (yellow/red signal
-	// work, green merged, grey noise, magenta the mismatch segment). Faint
-	// was the first pick and read as nearly invisible, especially under
-	// the selected row's grey highlight band. Adaptive, like the row
-	// highlight itself, so light themes get a darker blue that survives
-	// the white background (see rowHighlightStyle).
+	// work, green merged, grey noise, magenta the mismatch segment). The
+	// word keeps this full brightness inside its row's grey-out (see
+	// greyOutParkedRows for how), the same exception coppice makes for
+	// its own parked label inside a dimmed row; making the word itself
+	// faint instead was the first pick and read as nearly invisible,
+	// especially under the selected row's grey highlight band. Adaptive,
+	// like the row highlight itself, so light themes get a darker blue
+	// that survives the white background (see rowHighlightStyle).
 	"parked": lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "4", Dark: "12"}),
 }
 
@@ -68,6 +71,53 @@ var (
 // than a single fixed grey that could wash out on one theme or the
 // other.
 var rowHighlightStyle = lipgloss.NewStyle().Background(lipgloss.AdaptiveColor{Light: "254", Dark: "237"})
+
+// parkedRowStyle is a parked row's grey-out (see greyOutParkedRows): the
+// whole row faint, the same "dim" coppice renders its own parked rows
+// in (its [dim] markup wraps every cell). Faint rather than a grey
+// foreground so the row's nested colors (a "merged" Merge cell, a
+// mismatch suffix) dim with it, the way rich's dim tints the spans it
+// wraps — a foreground would leave those at full brightness inside the
+// grey. The one thing not dimmed is the Worktree column's own "parked"
+// word, the one signal a parked row exists to show (see
+// greyOutParkedRows for how it stays bright).
+var parkedRowStyle = lipgloss.NewStyle().Faint(true)
+
+// greyOutParkedRows greys out every parkedMarker-tagged row of an
+// already colorized table view (see buildWorktreeRows for the tagging)
+// and strips the marker back out. It must run after loam.ColorizeRows,
+// not before: that pass leaves any line already carrying ANSI alone (see
+// its doc), so a dimmed-first row would be skipped by its own Worktree/
+// Merge coloring; dimming second nests those colors inside the faint
+// instead, exactly like coppice's [dim] cell wrapping.
+//
+// The row's "parked" word is the one exception to the dim: SGR 22
+// ("normal intensity", clearing the faint) is spliced into the word's
+// own opening sequence, so the signal survives the grey-out at full
+// brightness — coppice makes the same exception, keeping its parked
+// label bright blue inside the dimmed row. Splicing into the opening
+// sequence beats splitting the line into dimmed flanks around the word:
+// a selected parked row's highlight band (rowHighlightStyle, already
+// applied by loam.ColorizeRows) then keeps flowing behind the word
+// instead of breaking for an undimmed gap. lipgloss can't emit SGR 22
+// itself (styles only ever set attributes, never clear them), so it's
+// spliced in by hand, once, at the row's single parked-word span.
+func greyOutParkedRows(view string) string {
+	parkedOpen, _ := loam.StyleSequences(worktreeStatusStyle("parked"))
+	lines := strings.Split(view, "\n")
+	for i, line := range lines {
+		if !strings.Contains(line, parkedMarker) {
+			continue
+		}
+		line = strings.ReplaceAll(line, parkedMarker, "")
+		line = loam.HighlightRow(line, parkedRowStyle)
+		if parkedOpen != "" {
+			line = strings.Replace(line, parkedOpen, parkedOpen+"\x1b[22m", 1)
+		}
+		lines[i] = line
+	}
+	return strings.Join(lines, "\n")
+}
 
 // worktreeStatusStyle and mergeStatusStyle share coppice's own color
 // choices for the same three/four words ([yellow]dirty[/], [dim]clean[/],
@@ -120,13 +170,16 @@ func branchSegments(word string) []loam.Segment {
 }
 
 // colorizeRows recolors the Worktree and Merge columns and the Branch
-// column's mismatch suffix of a table's already rendered view and
+// column's mismatch suffix of a table's already rendered view,
 // highlights the whole line of whichever row carries cursorSentinel
-// (see app.go's doc on it), by delegating straight to loam.ColorizeRows.
+// (see app.go's doc on it), and greys out every parkedMarker-tagged
+// (parked) row — the first two by delegating to loam.ColorizeRows, the
+// last by greyOutParkedRows, which must run after it (see its own doc).
 func colorizeRows(view string, cols []table.Column, worktreeCol, mergeCol int) string {
-	return loam.ColorizeRows(view, cols, []loam.WordColumn{
+	colored := loam.ColorizeRows(view, cols, []loam.WordColumn{
 		{Index: mergeCol, Style: mergeStatusStyle},
 		{Index: worktreeCol, Style: worktreeStatusStyle},
 		{Index: colBranch, Segment: branchSegments},
 	}, rowHighlightStyle)
+	return greyOutParkedRows(colored)
 }

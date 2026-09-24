@@ -54,6 +54,15 @@ const notifyDuration = 4 * time.Second
 // colorizeRows (colorize.go) checks for.
 const cursorSentinel = loam.Sentinel
 
+// parkedMarker tags a parked worktree's row for greyOutParkedRows
+// (colorize.go) to grey out: the same zero-width marker trick as
+// cursorSentinel above (see loam.Sentinel's doc), but a different
+// character — U+200C ZERO WIDTH NON-JOINER, verified 0 display width
+// under go-runewidth, so the table's padding/truncation math is
+// unaffected — because loam.ColorizeRows strips every cursorSentinel
+// before the grey-out pass ever runs, so reusing it would lose the tag.
+const parkedMarker = "\u200c"
+
 var (
 	titleStyle  = lipgloss.NewStyle().Bold(true)
 	subtleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))

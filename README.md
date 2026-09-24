@@ -98,9 +98,12 @@ with a dim `@` and a magenta segment, the same colors coppice gives it,
 so it reads as context next to the plain branch name. Worktree/Merge are
 plain-word renderings of `wt`'s own compact status glyphs
 (dirty/ahead/behind), rather than the glyphs themselves. Worktree also
-shows `parked` (dimmed) when the branch carries coppice's parked mark
+shows `parked` when the branch carries coppice's parked mark
 (`cop park`, a `branch.<branch>.parked-at` git config timestamp) and no
-commit has landed since: task complete, kept on disk for follow-up. A
+commit has landed since: task complete, kept on disk for follow-up. The
+whole row greys out around the still-blue word, the same treatment
+`cop list` gives its parked rows, so a parked worktree reads as set
+aside at a glance while the signal itself stays legible. A
 newer head commit flips the row back to active on its own, the same
 read-time rule `cop list` applies, so a stale mark never needs cleaning
 up. The VS Code

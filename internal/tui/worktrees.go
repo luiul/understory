@@ -671,6 +671,16 @@ func buildWorktreeRows(worktrees []worktree.Entry, cursor int, home string, now 
 			label = ""
 		}
 		created := humanizeSince(now.Sub(w.CreatedTime))
+		if worktreeStatusLabel(w) == "parked" {
+			// The row's grey-out tag, for greyOutParkedRows (colorize.go):
+			// keyed on the same condition the Worktree column's own
+			// "parked" word is (stale wins over parked there, so a
+			// stale-but-marked row renders as a removal candidate, not
+			// greyed out — the same precedence coppice's `not stale and
+			// parked` check follows). Prepended for the same truncation-
+			// survival reason as the cursor tag below.
+			created = parkedMarker + created
+		}
 		if i == cursor {
 			// Prepended, not appended: bubbles/table truncates a
 			// too-long cell from the tail (runewidth.Truncate keeps the
