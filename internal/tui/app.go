@@ -44,6 +44,14 @@ import (
 // is only ever observed by a window nobody is looking at.
 const DefaultInterval = 15 * time.Second
 
+// probeInterval is the membership probe's cadence (issue #10). The
+// probe itself is in-process and sub-millisecond (see worktree.Probe),
+// so a few-second tick bounds how long a worktree created or removed
+// while nobody is looking at the window takes to show up — without any
+// of the subprocess cost polling at this rate would mean (see
+// DefaultInterval for why the full poll stays slow).
+const probeInterval = 3 * time.Second
+
 const notifyDuration = 4 * time.Second
 
 // cursorSentinel tags whichever row is currently selected; see
@@ -106,9 +114,15 @@ type tickMsg struct{}
 // pollStartedMsg opens a streaming poll: results is StreamAll's
 // channel, handed to waitRepoResult so each repo renders the moment it
 // lands (issue #8) instead of the whole view waiting for the slowest
-// repo behind one barrier. The window snapshot for the same poll
-// arrives on its own message (snapshotMsg), captured concurrently.
-type pollStartedMsg struct{ results <-chan worktree.RepoResult }
+// repo behind one barrier. targeted marks a poll over a SUBSET of
+// repos (a probe-triggered one, see targetedPollOnce): finishPoll must
+// not treat the repos it didn't cover as dropped. The window snapshot
+// for the same poll arrives on its own message (snapshotMsg), captured
+// concurrently.
+type pollStartedMsg struct {
+	results  <-chan worktree.RepoResult
+	targeted bool
+}
 
 // repoResultMsg is one repo's streamed poll result; next is the same
 // channel, for the follow-up wait (each result re-arms exactly one
@@ -150,6 +164,10 @@ type pollResultMsg struct {
 type openResultMsg struct{ result mycelium.Result }
 type clearNotifyMsg struct{ token int }
 
+// probeTickMsg fires the cheap membership probe's cadence (see
+// probeInterval), distinct from tickMsg's full-poll cadence.
+type probeTickMsg struct{}
+
 // Model is the bubbletea model backing the dashboard.
 type Model struct {
 	interval time.Duration
@@ -169,8 +187,9 @@ type Model struct {
 	// a guard they pile a second 8-way `wt list` subprocess fan-out on
 	// top of the one already running — exactly the contention that
 	// pushes repos past their timeout (issue #7). Set by New (Init's
-	// first poll) and pollOnce, cleared when the pollDoneMsg (or the
-	// batch-path pollResultMsg) lands.
+	// first poll), pollOnce, requestFullPoll, and targetedPollOnce,
+	// cleared when the pollDoneMsg (or the batch-path pollResultMsg)
+	// lands.
 	pollInFlight bool
 	// poll is the live streaming poll's bookkeeping (see livePoll), nil
 	// whenever no streamed poll is between its pollStartedMsg and
@@ -181,6 +200,21 @@ type Model struct {
 	// worktrees…" rather than the old "no known worktrees" claim (issue
 	// #7: it showed for the whole first-poll duration, 5-11s+).
 	pollsLanded int
+	// repos is the registered repo list the membership probe watches
+	// (issue #10), resolved lazily on the first probe — resolving costs
+	// a git subprocess for the cwd fallback (spawn tax, issue #9), which
+	// New must not pay for a dashboard that may never be probed — and
+	// re-resolved when the registry file's mtime changes (registryMtime).
+	// Full polls resolve their own fresh list per poll (see pollCmd).
+	repos         []string
+	registryMtime time.Time
+	// pendingProbe queues the repos the probe saw change while a poll
+	// was in flight, and pendingFull one explicitly requested full poll
+	// (r, a registry change, a mutation's refresh): a second concurrent
+	// fan-out is exactly the contention issue #7 documents, so both wait
+	// for pollDoneMsg to drain them instead of piling on.
+	pendingProbe []string
+	pendingFull  bool
 	// pollFailures is how many repos the last poll failed on (see
 	// applyPollResults): their rows are last-known, and the placeholder,
 	// the summary line's unreachable suffix, and the one-time transition
@@ -269,6 +303,11 @@ type livePoll struct {
 	okRepos  map[string]bool
 	polled   map[string]bool
 	failures int
+	// targeted is true for a probe-triggered subset poll (see
+	// targetedPollOnce): finishPoll skips its prune-unpolled-repos step
+	// and leaves the full poll's failure bookkeeping (m.pollFailures)
+	// untouched for these.
+	targeted bool
 }
 
 func newLivePoll() *livePoll {
@@ -317,29 +356,93 @@ func New(interval time.Duration, showMain bool) Model {
 	return m
 }
 
-// Init kicks off the first poll, its window snapshot, and the
-// recurring timer.
+// Init kicks off the first poll, its window snapshot, and the two
+// recurring timers (the full poll's and the membership probe's).
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(pollCmd(), snapshotCmd(), tickCmd(m.interval))
+	return tea.Batch(pollCmd(), snapshotCmd(), tickCmd(m.interval), probeTickCmd())
 }
 
 func tickCmd(interval time.Duration) tea.Cmd {
 	return tea.Tick(interval, func(time.Time) tea.Msg { return tickMsg{} })
 }
 
-// pollOnce is the only way Update starts a poll: it returns the poll
-// and snapshot commands and marks the poll in flight, or nil when one
-// is already running — its results land soon enough either way, and
-// piling on a second fan-out doubles the contention that causes poll
-// timeouts. Skipping silently is fine even for an explicit r: the
-// in-flight poll's result is by definition fresher than whatever the
-// user is looking at.
+// pollOnce starts a routine full poll and marks it in flight, or
+// returns nil when one is already running — its results land soon
+// enough either way, and piling on a second fan-out doubles the
+// contention that causes poll timeouts (issue #7). The silent drop is
+// for ROUTINE triggers (the tick, the focus fallback) only: an explicit
+// request goes through requestFullPoll, which queues instead.
 func (m *Model) pollOnce() tea.Cmd {
 	if m.pollInFlight {
 		return nil
 	}
 	m.pollInFlight = true
 	return tea.Batch(pollCmd(), snapshotCmd())
+}
+
+// requestFullPoll is pollOnce for user- or event-driven refreshes (r,
+// a registry change, a mutation's follow-up): the request must not
+// silently drop the way a routine tick's may, so with a poll already in
+// flight it queues exactly one full poll behind it (pollDoneMsg drains
+// pendingFull).
+func (m *Model) requestFullPoll() tea.Cmd {
+	if m.pollInFlight {
+		m.pendingFull = true
+		return nil
+	}
+	m.pollInFlight = true
+	return tea.Batch(pollCmd(), snapshotCmd())
+}
+
+// targetedPollOnce starts a streamed poll over JUST the given repos —
+// the follow-up to a probe-detected membership change (issue #10), so
+// fresh data lands in the time one uncontended `wt list` takes rather
+// than a full-registry fan-out. A poll already in flight queues the
+// repos in pendingProbe instead (pollDoneMsg drains them); the skeleton
+// rows the probe inserted cover the wait either way.
+func (m *Model) targetedPollOnce(repoPaths []string) tea.Cmd {
+	if len(repoPaths) == 0 {
+		return nil
+	}
+	if m.pollInFlight {
+		m.pendingProbe = unionStrings(m.pendingProbe, repoPaths)
+		return nil
+	}
+	m.pollInFlight = true
+	return tea.Batch(targetedPollCmd(repoPaths), snapshotCmd())
+}
+
+// probeNow reconciles the view against the live on-disk membership
+// (see worktree.Probe) and returns whatever poll command follows: a
+// registry change re-resolves the repo list and requests a full poll;
+// membership changes in known repos insert skeleton rows / drop
+// vanished rows immediately and start a targeted poll over just the
+// changed repos; no change at all falls back to a routine full poll
+// when fallbackFullPoll is set (the focus refresh's old unconditional
+// behavior, kept for status freshness) and otherwise does nothing (the
+// probe tick's case — the full-poll tick owns that cadence). The probe
+// itself is in-process and sub-millisecond, so this is cheap enough to
+// run on every focus event and every probe tick.
+func (m *Model) probeNow(fallbackFullPoll bool) tea.Cmd {
+	if m.repos == nil {
+		// First probe: establish the baseline (repo list + registry
+		// mtime) without treating the zero-value mtime becoming real as
+		// a "change" worth a full poll.
+		m.repos = knownRepoPaths()
+		m.registryMtime, _ = registryModified()
+	} else if mt, ok := registryModified(); ok && !mt.Equal(m.registryMtime) {
+		m.registryMtime = mt
+		m.repos = knownRepoPaths()
+		return m.requestFullPoll()
+	}
+	changed := m.reconcileMembership(probeMembership(m.repos))
+	if len(changed) > 0 {
+		return m.targetedPollOnce(changed)
+	}
+	if fallbackFullPoll {
+		return m.pollOnce()
+	}
+	return nil
 }
 
 // pollCmd starts one streaming poll over every known repo. The returned
@@ -350,6 +453,21 @@ func pollCmd() tea.Cmd {
 	return func() tea.Msg {
 		return pollStartedMsg{results: worktree.StreamAll(worktree.KnownRepoPaths())}
 	}
+}
+
+// targetedPollCmd is pollCmd over a SUBSET of repos (see
+// targetedPollOnce): the targeted flag tells the poll bookkeeping (and
+// finishPoll) the results don't cover the registry, so nothing
+// unpolled gets pruned.
+func targetedPollCmd(repoPaths []string) tea.Cmd {
+	return func() tea.Msg {
+		return pollStartedMsg{results: worktree.StreamAll(repoPaths), targeted: true}
+	}
+}
+
+// probeTickCmd re-arms the membership probe's timer (see probeInterval).
+func probeTickCmd() tea.Cmd {
+	return tea.Tick(probeInterval, func(time.Time) tea.Msg { return probeTickMsg{} })
 }
 
 // snapshotCmd captures the poll's VS Code window snapshot (see
@@ -404,6 +522,17 @@ type vscodeSnapshot interface {
 // snapshotVSCode is a package-level seam onto mycelium.SnapshotVSCode,
 // the same pattern as openVSCode above.
 var snapshotVSCode = func() vscodeSnapshot { return mycelium.SnapshotVSCode() }
+
+// probeMembership is a package-level seam onto worktree.Probe (the
+// in-process .git/worktrees membership read, issue #10), swapped in
+// tests so probeNow never touches the real disk; knownRepoPaths and
+// registryModified are the same for worktree.KnownRepoPaths and
+// worktree.RegistryMtime. Same pattern as openVSCode/snapshotVSCode.
+var (
+	probeMembership  = worktree.Probe
+	knownRepoPaths   = worktree.KnownRepoPaths
+	registryModified = worktree.RegistryMtime
+)
 
 // vscodeStates maps each entry's path to its VS Code window state for
 // this poll. A failed registry read (snapshot.Err, the extension not
@@ -596,7 +725,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 		case "r":
-			return m, m.pollOnce()
+			return m, m.requestFullPoll()
 		case "/":
 			// Enter filter mode with the current query ready to edit
 			// (cursor at its end), so refining an applied filter is /
@@ -661,19 +790,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		return m, tea.Batch(m.pollOnce(), tickCmd(m.interval))
 
+	case probeTickMsg:
+		return m, tea.Batch(m.probeNow(false), probeTickCmd())
+
 	case tea.FocusMsg:
 		// The user just switched to this window, which is almost always
 		// the moment they read the table — and the typical flow is
 		// creating a worktree in another window (cop new, jira-worktree)
-		// and then switching here to check it showed up. Without this, a
-		// worktree created seconds ago is invisible until the next tick
-		// (up to interval away), which reads as "understory isn't listing
-		// it". Poll immediately on focus instead of making the user wait
-		// or hit r — unless a poll is already in flight (see pollOnce),
-		// in which case its fresh result is landing shortly anyway. This
-		// is an extra poll on top of the tick chain, which keeps its own
-		// cadence either way.
-		return m, m.pollOnce()
+		// and then switching here to check it showed up. The membership
+		// probe (issue #10) answers that in milliseconds: a changed repo
+		// gets skeleton rows now and a targeted poll in seconds, instead
+		// of the new worktree waiting out a full-registry fan-out (and,
+		// before the probe existed, possibly a swallowed pollOnce behind
+		// an in-flight poll plus a whole tick). No membership change
+		// falls back to the old unconditional full poll, so dirty/merge
+		// statuses still refresh on focus the way they always have.
+		return m, m.probeNow(true)
 
 	case pollStartedMsg:
 		// Guarded, not unconditional: the concurrently-batched
@@ -682,6 +814,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.poll == nil {
 			m.poll = newLivePoll()
 		}
+		m.poll.targeted = msg.targeted
 		return m, waitRepoResult(msg.results)
 
 	case repoResultMsg:
@@ -695,6 +828,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.poll.okRepos[msg.result.RepoPath] = true
 		}
 		m.applyStreamedRepo(msg.result, m.poll.snap)
+		if msg.result.Err == nil {
+			// The repo's `wt list` ran seconds ago; the probe reads the
+			// disk NOW. Reconciling the landed rows against live
+			// membership keeps a worktree created or removed between the
+			// two from flapping out (or staying out) for a whole poll
+			// cycle; a real disagreement queues a targeted re-poll behind
+			// the in-flight one.
+			changed := m.reconcileMembership(probeMembership([]string{msg.result.RepoPath}))
+			m.pendingProbe = unionStrings(m.pendingProbe, changed)
+		}
 		return m, waitRepoResult(msg.next)
 
 	case snapshotMsg:
@@ -719,12 +862,39 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			poll = newLivePoll()
 		}
 		m.pollsLanded++
-		return m, m.finishPoll(poll.failures, poll.polled)
+		cmd := m.finishPoll(poll.failures, poll.polled, poll.targeted)
+		// Work queued while the poll ran starts now: an explicit full
+		// poll first (registry change, r, a mutation's refresh), then
+		// the repos the probe saw change (their skeleton rows are
+		// already showing; this fills in their real data).
+		if m.pendingFull {
+			m.pendingFull = false
+			return m, tea.Batch(cmd, m.pollOnce())
+		}
+		if len(m.pendingProbe) > 0 {
+			repos := m.pendingProbe
+			m.pendingProbe = nil
+			return m, tea.Batch(cmd, m.targetedPollOnce(repos))
+		}
+		return m, cmd
 
 	case pollResultMsg:
 		m.pollInFlight = false
 		m.pollsLanded++
-		return m, m.applyPollResults(msg)
+		// The batch shape never carries probe queue state (tests and
+		// one-shot callers only), but drain anything queued anyway so a
+		// stray pendingProbe can't outlive the poll that caused it.
+		cmd := m.applyPollResults(msg)
+		if m.pendingFull {
+			m.pendingFull = false
+			return m, tea.Batch(cmd, m.pollOnce())
+		}
+		if len(m.pendingProbe) > 0 {
+			repos := m.pendingProbe
+			m.pendingProbe = nil
+			return m, tea.Batch(cmd, m.targetedPollOnce(repos))
+		}
+		return m, cmd
 
 	case openResultMsg:
 		return m, m.notify(msg.result.Message, !msg.result.OK)
@@ -737,7 +907,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// away).
 		for _, r := range msg.results {
 			if r.Err == nil {
-				return m, tea.Batch(cmd, m.pollOnce())
+				return m, tea.Batch(cmd, m.requestFullPoll())
 			}
 		}
 		return m, cmd
@@ -752,7 +922,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Refresh right away so the row's parked rendering changes now
 		// instead of on the next tick (up to interval away).
-		return m, tea.Batch(m.notify(text, false), m.pollOnce())
+		return m, tea.Batch(m.notify(text, false), m.requestFullPoll())
 
 	case copyResultMsg:
 		if msg.err != nil {

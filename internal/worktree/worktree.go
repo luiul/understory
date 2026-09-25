@@ -144,6 +144,16 @@ type Entry struct {
 	// and a branch worktree (vs. its main branch), and wt already resolved
 	// that correctly.
 	Symbols string
+	// Skeleton is true for a row the in-process membership probe (see
+	// Probe) inserted before any `wt list` has reported on it: Branch,
+	// Path, RepoPath, and CreatedTime are known from the repo's on-disk
+	// admin dir, everything the poll would resolve (Dirty, MergeStatus,
+	// CommitSHA/CommitTime) is still unknown and renders as "…". The
+	// targeted poll every probe-detected change triggers replaces the
+	// skeleton wholesale the moment it lands (the per-repo row merge
+	// swaps a repo's entries as a set), so a skeleton never survives
+	// past its repo's next successful poll.
+	Skeleton bool
 	// ParkedAt is the branch's parked mark (coppice's `cop park`: a
 	// `branch.<branch>.parked-at` unix timestamp in the repo's shared
 	// local git config), folded in from that config by ListWorktrees (see

@@ -479,6 +479,131 @@ func (m *Model) applyRepoVSCode(entries []worktree.Entry, snap vscodeSnapshot) {
 	}
 }
 
+// reconcileMembership folds one in-process membership probe (see
+// worktree.Probe) into the row set: a probed path with no row gets a
+// skeleton entry (Branch/Path/Created known from the repo's admin dir,
+// everything else "…" until the targeted poll lands), and a non-main
+// row whose admin dir is gone drops out immediately — the admin dir IS
+// git's own worktree registration, so its absence is as authoritative
+// as `git worktree list`. Repos the probe couldn't read (absent from
+// probed) are left strictly alone: a missing probe answer is
+// "unknown", never "empty", the same keep-last-known rule
+// mergeRepoRows follows for a failed poll (issue #7). Main worktree
+// rows are never touched: the probe reports linked worktrees only.
+// Returns the repos whose membership changed, sorted, for the targeted
+// poll the caller then triggers.
+func (m *Model) reconcileMembership(probed map[string][]worktree.ProbeEntry) []string {
+	if len(probed) == 0 {
+		return nil
+	}
+	previousPath := m.selectedPath()
+	changed := map[string]bool{}
+
+	// Drop rows whose on-disk registration vanished.
+	kept := make([]worktree.Entry, 0, len(m.worktrees))
+	for _, e := range m.worktrees {
+		entries, ok := probed[e.RepoPath]
+		if !ok || e.IsMain {
+			kept = append(kept, e)
+			continue
+		}
+		found := false
+		for _, pe := range entries {
+			if pe.Path == e.Path {
+				found = true
+				break
+			}
+		}
+		if found {
+			kept = append(kept, e)
+		} else {
+			changed[e.RepoPath] = true
+		}
+	}
+	m.worktrees = kept
+
+	// Insert skeletons for probed paths no row covers.
+	existing := map[string]map[string]bool{}
+	for _, e := range m.worktrees {
+		if existing[e.RepoPath] == nil {
+			existing[e.RepoPath] = map[string]bool{}
+		}
+		existing[e.RepoPath][e.Path] = true
+	}
+	for repo, entries := range probed {
+		for _, pe := range entries {
+			if existing[repo][pe.Path] {
+				continue
+			}
+			changed[repo] = true
+			if pe.Branch == "" {
+				// Detached HEAD: no branch label to render, so no
+				// skeleton — but membership did change, so the
+				// targeted poll still runs and lets wt classify it.
+				continue
+			}
+			m.worktrees = append(m.worktrees, skeletonEntry(repo, pe, m.worktrees))
+		}
+	}
+
+	if len(changed) == 0 {
+		return nil
+	}
+	m.revalidateConfirm(m.worktrees)
+	m.redisplay(previousPath)
+	repos := make([]string, 0, len(changed))
+	for repo := range changed {
+		repos = append(repos, repo)
+	}
+	sort.Strings(repos)
+	return repos
+}
+
+// skeletonEntry builds the probe-inserted placeholder row for a
+// worktree no poll has reported on yet (see worktree.Entry.Skeleton):
+// RepoPath/Branch/Path/CreatedTime from the probe, Owner/Repo copied
+// from the repo's existing rows so its group label matches its
+// siblings (falling back to the repo dir's basename for a repo with no
+// rows yet, the same rule applyRepoFallback uses), and a zero
+// CommitTime — which sorts the skeleton last in its repo group (see
+// sortWorktrees) until the targeted poll lands its real commit info.
+func skeletonEntry(repoPath string, pe worktree.ProbeEntry, entries []worktree.Entry) worktree.Entry {
+	var owner, repo string
+	for _, e := range entries {
+		if e.RepoPath == repoPath && (e.Owner != "" || e.Repo != "") {
+			owner, repo = e.Owner, e.Repo
+			break
+		}
+	}
+	if owner == "" && repo == "" {
+		repo = filepath.Base(filepath.Clean(repoPath))
+	}
+	return worktree.Entry{
+		Owner:       owner,
+		Repo:        repo,
+		Branch:      pe.Branch,
+		Path:        pe.Path,
+		RepoPath:    repoPath,
+		CreatedTime: pe.CreatedTime,
+		Skeleton:    true,
+	}
+}
+
+// unionStrings appends the items of b missing from a, preserving order.
+func unionStrings(a, b []string) []string {
+	seen := map[string]bool{}
+	for _, s := range a {
+		seen[s] = true
+	}
+	for _, s := range b {
+		if !seen[s] {
+			a = append(a, s)
+			seen[s] = true
+		}
+	}
+	return a
+}
+
 // applySnapToPolledRepos applies a late-arriving window snapshot to the
 // repos that already landed successfully before it (the common case is
 // the reverse: the snapshot wins the race against every repo and each
@@ -510,17 +635,27 @@ func (m *Model) applySnapToPolledRepos() {
 // staying unreachable are already visible in the summary line's suffix
 // on every render, so re-notifying every poll would drown the status
 // line.
-func (m *Model) finishPoll(failures int, polled map[string]bool) tea.Cmd {
+//
+// A TARGETED poll (issue #10: a probe-triggered poll over a subset of
+// repos, see targetedPollOnce) is different on two counts: nothing gets
+// pruned for being unpolled (the repos it didn't cover are healthy,
+// just out of scope), and the full poll's failure bookkeeping
+// (m.pollFailures, the 0→N notification) is left alone — the count
+// always describes the last FULL poll, and a one-repo targeted failure
+// must neither fake a repo-wide outage nor clear a real one.
+func (m *Model) finishPoll(failures int, polled map[string]bool, targeted bool) tea.Cmd {
 	previousPath := m.selectedPath()
-	kept := m.worktrees[:0]
-	for _, e := range m.worktrees {
-		if polled[e.RepoPath] {
-			kept = append(kept, e)
+	if !targeted {
+		kept := m.worktrees[:0]
+		for _, e := range m.worktrees {
+			if polled[e.RepoPath] {
+				kept = append(kept, e)
+			}
 		}
+		m.worktrees = kept
 	}
-	m.worktrees = kept
-	live := make(map[string]bool, len(kept))
-	for _, e := range kept {
+	live := make(map[string]bool, len(m.worktrees))
+	for _, e := range m.worktrees {
 		live[e.Path] = true
 	}
 	for path := range m.vscode {
@@ -534,11 +669,13 @@ func (m *Model) finishPoll(failures int, polled map[string]bool) tea.Cmd {
 		}
 	}
 	prevFailures := m.pollFailures
-	m.pollFailures = failures
+	if !targeted {
+		m.pollFailures = failures
+	}
 	m.revalidateConfirm(m.worktrees)
 	m.redisplay(previousPath)
 	savePollCache(m.worktrees, m.vscode, m.vscodeStrict)
-	if prevFailures == 0 && m.pollFailures > 0 {
+	if !targeted && prevFailures == 0 && m.pollFailures > 0 {
 		return m.notify(repoCountLabel(m.pollFailures)+" timed out or errored; keeping last-known rows", true)
 	}
 	return nil
@@ -585,7 +722,10 @@ func (m *Model) applyPollResults(msg pollResultMsg) tea.Cmd {
 	}
 	m.vscode, m.vscodeStrict = msg.vscode, msg.vscodeStrict
 
-	return m.finishPoll(len(failed), polled)
+	// The batch path is only ever a full poll (tests and one-shot
+	// callers); the targeted subset shape exists solely in the streamed
+	// path (see targetedPollCmd).
+	return m.finishPoll(len(failed), polled, false)
 }
 
 // repoCountLabel renders "1 repo" / "N repos" for the poll-health
@@ -830,6 +970,9 @@ func buildWorktreeRows(worktrees []worktree.Entry, cursor int, home string, now 
 // coppice's own dimmed parked rows follow), and a dirty parked one was
 // already acknowledged when it got parked.
 func worktreeStatusLabel(w worktree.Entry) string {
+	if w.Skeleton {
+		return "…" // probe-inserted, not yet polled (see Entry.Skeleton)
+	}
 	if w.Stale {
 		return "stale"
 	}
@@ -846,6 +989,9 @@ func worktreeStatusLabel(w worktree.Entry) string {
 // "-" for its zero value (not applicable to the main worktree, or moot
 // for a stale one), the computed label otherwise.
 func mergeStatusLabel(w worktree.Entry) string {
+	if w.Skeleton {
+		return "…" // probe-inserted, not yet polled (see Entry.Skeleton)
+	}
 	if w.MergeStatus == "" {
 		return "-"
 	}
@@ -906,6 +1052,10 @@ func worktreeSummaryLine(entries []worktree.Entry) string {
 	counts := map[string]int{}
 	for _, e := range entries {
 		switch {
+		case e.Skeleton:
+			// Probe-inserted, poll hasn't landed (see Entry.Skeleton):
+			// its own honest bucket rather than a wrong "clean".
+			counts["probing"]++
 		case e.Stale:
 			counts["stale"]++
 		case e.Parked():
@@ -924,7 +1074,7 @@ func worktreeSummaryLine(entries []worktree.Entry) string {
 	}
 
 	var parts []string
-	for _, bucket := range []string{"dirty", "stale", "parked", "conflict", "merged", "clean", "unknown"} {
+	for _, bucket := range []string{"dirty", "stale", "parked", "conflict", "merged", "clean", "unknown", "probing"} {
 		n := counts[bucket]
 		if n == 0 {
 			continue
@@ -935,10 +1085,15 @@ func worktreeSummaryLine(entries []worktree.Entry) string {
 		// rather than reusing one for both keeps this tied to the same
 		// source of truth the table itself renders from, even though
 		// "clean" and "unknown" happen to resolve to the same dim grey
-		// today.
+		// today. probing is transient by definition (seconds at most), so
+		// it gets the summary line's own quiet grey rather than a status
+		// color that would out-shout the real buckets.
 		style := worktreeStatusStyle(bucket)
 		if bucket == "merged" || bucket == "conflict" || bucket == "unknown" {
 			style = mergeStatusStyle(bucket)
+		}
+		if bucket == "probing" {
+			style = subtleStyle
 		}
 		parts = append(parts, style.Render(fmt.Sprintf("%d %s", n, bucket)))
 	}

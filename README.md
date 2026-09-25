@@ -217,11 +217,25 @@ already listed, so the view isn't empty by default for a repo that's
 never gone through `wt`/coppice. Requires `wt` on PATH for any data at
 all; without it, understory says so instead of showing an empty list.
 
-The view polls on a slow interval (worktree state barely changes), but
-also refreshes the moment the terminal window regains focus: the typical
-flow is creating a worktree in another window (`cop new`, jira-worktree)
-and then switching to understory to check it, and a worktree created
-seconds ago shouldn't be invisible until the next tick.
+The view polls on a slow interval (worktree state barely changes).
+Between polls, an in-process membership probe keeps detection nearly
+live (issue [#10](https://github.com/luiul/understory/issues/10)).
+Every three seconds, and again whenever the terminal window regains
+focus, understory reads each known repo's `.git/worktrees` admin
+directory itself: no subprocess, so none of the per-spawn cost that
+makes `wt list` slow to notice changes (issue
+[#9](https://github.com/luiul/understory/issues/9)). A repo whose
+membership changed gets a skeleton row right away (branch, path, and
+age from the admin dir; the status columns read "…"), and a targeted
+`wt list` over just that repo replaces it with full data seconds
+later, instead of the new worktree waiting out a full-registry
+fan-out. A removed worktree's row drops on the same probe. The typical
+flow is creating a worktree in another window (`cop new`,
+jira-worktree) and switching here to check it: the skeleton is on
+screen before you can read it. A focus that finds no membership change
+still runs a full poll, so dirty/merge statuses refresh on window
+switch the way they always have. The probe answers membership only;
+everything else still comes from the streamed poll.
 
 Startup is stale-while-revalidate (issue
 [#8](https://github.com/luiul/understory/issues/8)). Every `wt list` is

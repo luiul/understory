@@ -102,10 +102,14 @@ func TestStaleClearNotifyMsgIsIgnored(t *testing.T) {
 
 func TestFocusMsgTriggersAnImmediatePoll(t *testing.T) {
 	// Switching to understory's window must refresh right away (see the
-	// tea.FocusMsg case in Update): a worktree created in another window
-	// can't wait up to interval for the next tick. A fresh model counts
-	// Init's first poll as in flight (see New), so land one first — focus
-	// during an in-flight poll deliberately doesn't pile on a second.
+	// tea.FocusMsg case in Update): with no membership change on disk
+	// the probe falls back to a full poll, the focus refresh's original
+	// behavior. A fresh model counts Init's first poll as in flight (see
+	// New), so land one first — focus during an in-flight poll
+	// deliberately doesn't pile on a second.
+	installProbeSeams(t, []string{"/repo/a"}, map[string][]worktree.ProbeEntry{
+		"/repo/a": {},
+	})
 	m := New(999, false)
 	updated, _ := m.Update(pollResultMsg{})
 	m = updated.(Model)
@@ -547,13 +551,19 @@ func TestViewMarksColumnBordersOnTheHeaderRowSoThereIsSomethingToDrag(t *testing
 
 // --- poll health states (issue #7) --------------------------------------
 
-func TestRKeyIsANoopWhileAPollIsInFlight(t *testing.T) {
+func TestRKeyDoesNotPileOnWhileAPollIsInFlight(t *testing.T) {
 	// A fresh model counts Init's first poll as in flight (see New):
 	// pressing r must not pile a second poll's subprocess fan-out on top
-	// of it (see pollOnce).
+	// of it — it queues one full poll behind instead (see
+	// requestFullPoll; probe_test.go's
+	// TestRQueuesOneFullPollBehindAnInFlightOne covers the drain).
 	m := New(999, false)
-	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")}); cmd != nil {
-		t.Fatal("want r to be a no-op while a poll is in flight")
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	if cmd != nil {
+		t.Fatal("want no concurrent second poll while one is in flight")
+	}
+	if !updated.(Model).pendingFull {
+		t.Fatal("want the r queued as a pending full poll")
 	}
 }
 
