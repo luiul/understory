@@ -281,13 +281,9 @@ func TestMouseDragOnlyResizesTheTwoColumnsStraddlingTheDraggedBorder(t *testing.
 }
 
 func TestMouseDragBetweenTwoAlreadyMinimalColumnsIsANoOp(t *testing.T) {
-	// Repo and Branch are both already at their own content-driven floor
-	// (no worktrees means both sit at repoColWidth/branchColWidth), so
-	// their shared border has nothing to give in either direction — and,
-	// crucially, doesn't silently resize Path instead the way a single
-	// global "flex" sink column once would have.
+	// At the combined hard floor neither Repo nor Branch has room to give.
 	m := New(999, false)
-	m.width, m.height = 150, 40
+	m.width, m.height = 62, 40
 	m.resize()
 
 	cols := m.table.Columns()
@@ -310,11 +306,8 @@ func TestMouseDragBetweenTwoAlreadyMinimalColumnsIsANoOp(t *testing.T) {
 }
 
 func TestMouseDragRepoBranchBorderActuallyMoves(t *testing.T) {
-	// Regression test for the frozen-border bug: Repo/Branch's drag
-	// minimums were pinned at their content-grown widths, so neither had
-	// room to give and their shared border could never move. The minimums
-	// are the default floors now, so a drag on the border trades width
-	// between the two like any other border.
+	// Repo and Branch can trade width down to their hard floors.
+	// Content-driven preferred widths must not freeze this border.
 	m := New(999, false)
 	m.width, m.height = 150, 40
 	m.resize()
@@ -345,10 +338,8 @@ func TestMouseDragRepoBranchBorderActuallyMoves(t *testing.T) {
 }
 
 func TestMouseDragNarrowerThanContentSurvivesTheNextPoll(t *testing.T) {
-	// A drag that narrows a content-grown column below its content width
-	// is a deliberate pin: the next poll's column rebuild must keep it
-	// (truncating the label with an ellipsis) rather than snapping back
-	// to the content width.
+	// A changed drag chooses manual proportions. A later poll must not
+	// restore a narrowed branch to its preferred content width.
 	m := New(999, false)
 	m.width, m.height = 150, 40
 	m.resize()
@@ -360,9 +351,12 @@ func TestMouseDragNarrowerThanContentSurvivesTheNextPoll(t *testing.T) {
 	borderX := repoBorderX(cols)
 
 	// Drag right: Branch narrows below its content width, Repo widens.
+	delta := max(cols[colBranch].Width-branchColumnWidth(m.displayedWorktrees())+4, 4)
 	updated, _ := m.Update(tea.MouseMsg{X: borderX, Y: originY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 	m = updated.(Model)
-	updated, _ = m.Update(tea.MouseMsg{X: borderX + 4, Y: originY, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
+	updated, _ = m.Update(tea.MouseMsg{X: borderX + delta, Y: originY, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft})
 	m = updated.(Model)
 	resized := m.table.Columns()[colBranch].Width
 	if resized >= branchColumnWidth(m.displayedWorktrees()) {
@@ -371,7 +365,7 @@ func TestMouseDragNarrowerThanContentSurvivesTheNextPoll(t *testing.T) {
 
 	m.applyWorktrees([]worktree.Entry{long})
 	if got := m.table.Columns()[colBranch].Width; got != resized {
-		t.Fatalf("Branch width = %d after a poll, want %d (the user's pin, undiscarded)", got, resized)
+		t.Fatalf("Branch width = %d after a poll, want manual width %d", got, resized)
 	}
 }
 
@@ -416,17 +410,16 @@ func TestMouseDragWorktreeBorderMovesDownToItsContentFloor(t *testing.T) {
 		t.Fatalf("Merge width = %d, want %d (it absorbed exactly what Worktree gave up)", got, want)
 	}
 
-	// And the pin survives the next poll's column rebuild.
+	updated, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft})
+	m = updated.(Model)
+	// The chosen compact floor survives a poll after the gesture ends.
 	m.applyWorktrees([]worktree.Entry{wtEntry("/w/a", "a", 0)})
 	if got := m.table.Columns()[colWorktree].Width; got != wantWorktree {
-		t.Fatalf("Worktree width = %d after a poll, want %d (the user's pin, undiscarded)", got, wantWorktree)
+		t.Fatalf("Worktree width = %d after a poll, want chosen floor %d", got, wantWorktree)
 	}
 }
 
-func TestMouseDragRecordsOnlyTheTwoDraggedColumns(t *testing.T) {
-	// colOverrides must only ever pin the two columns a drag actually
-	// moved: recording every column's width would freeze Repo/Branch's
-	// grow-to-fit sizing from the first drag on.
+func TestMouseDragCreatesManualPreferencesForTheStretchPool(t *testing.T) {
 	m := New(999, false)
 	m.width, m.height = 150, 40
 	m.resize()
@@ -434,27 +427,24 @@ func TestMouseDragRecordsOnlyTheTwoDraggedColumns(t *testing.T) {
 	cols := m.table.Columns()
 	_, originY := m.renderHeader()
 	borderX := mergeBorderX(cols)
-
 	updated, _ := m.Update(tea.MouseMsg{X: borderX, Y: originY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 	m = updated.(Model)
+	if m.preferences.Manual() {
+		t.Fatal("a press without changed motion must keep automatic sizing")
+	}
 	updated, _ = m.Update(tea.MouseMsg{X: borderX + 4, Y: originY, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
 	m = updated.(Model)
-
-	if m.colOverrides == nil {
-		t.Fatal("want colOverrides recorded after a drag")
-	}
-	for i := range m.colOverrides {
-		if i != colMerge && i != colVSCode {
-			t.Fatalf("colOverrides pins column %d, want only the dragged pair (%d, %d)", i, colMerge, colVSCode)
-		}
+	updated, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft})
+	m = updated.(Model)
+	if !m.preferences.Manual() {
+		t.Fatal("changed motion must capture manual preferences")
 	}
 
-	// An unpinned Branch must still grow to fit a freshly polled longer
-	// branch name, drag or no drag.
-	long := wtEntry("/w/a", "issue/ISA-18408_dedupe-satellite-replay-echoes", 0)
+	before := m.table.Columns()[colBranch].Width
+	long := wtEntry("/w/a", strings.Repeat("branch", 20), 0)
 	m.applyWorktrees([]worktree.Entry{long})
-	if got, want := m.table.Columns()[colBranch].Width, branchColumnWidth(m.displayedWorktrees()); got != want {
-		t.Fatalf("Branch width = %d after a poll, want %d (still growing to fit, unpinned)", got, want)
+	if got := m.table.Columns()[colBranch].Width; got != before {
+		t.Fatalf("manual Branch grew after a poll: got %d, want %d", got, before)
 	}
 }
 
@@ -471,18 +461,18 @@ func TestMouseDragSurvivesTheNextPoll(t *testing.T) {
 	m = updated.(Model)
 	updated, _ = m.Update(tea.MouseMsg{X: borderX + 4, Y: originY, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
 	m = updated.(Model)
+	updated, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft})
+	m = updated.(Model)
 	resized := m.table.Columns()[colMerge].Width
 
-	// A fresh poll rebuilds columns from scratch (worktreeColumns);
-	// without colOverrides being carried through, Merge would silently
-	// revert to its own fixed default.
+	// A fresh poll keeps the manual layout at the same viewport.
 	m.applyWorktrees([]worktree.Entry{wtEntry("/w/a", "a", 0)})
 	if got := m.table.Columns()[colMerge].Width; got != resized {
-		t.Fatalf("Merge width = %d after a poll, want %d (the drag override, undiscarded)", got, resized)
+		t.Fatalf("Merge width = %d after a poll, want manual width %d", got, resized)
 	}
 }
 
-func TestWindowSizeMsgClearsColumnOverrides(t *testing.T) {
+func TestWindowSizeMsgKeepsManualPreferences(t *testing.T) {
 	m := New(999, false)
 	m.width, m.height = 150, 40
 	m.resize()
@@ -490,19 +480,18 @@ func TestWindowSizeMsgClearsColumnOverrides(t *testing.T) {
 	cols := m.table.Columns()
 	_, originY := m.renderHeader()
 	borderX := mergeBorderX(cols)
-
 	updated, _ := m.Update(tea.MouseMsg{X: borderX, Y: originY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 	m = updated.(Model)
 	updated, _ = m.Update(tea.MouseMsg{X: borderX + 4, Y: originY, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
 	m = updated.(Model)
-	if m.colOverrides[colMerge] == 0 {
-		t.Fatal("want a Merge override recorded after the drag")
-	}
 
-	updated, _ = m.Update(tea.WindowSizeMsg{Width: 150, Height: 40})
+	updated, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = updated.(Model)
-	if m.colOverrides != nil {
-		t.Fatalf("colOverrides = %v after a terminal resize, want nil", m.colOverrides)
+	if !m.preferences.Manual() {
+		t.Fatal("terminal width change must retain manual preferences")
+	}
+	if m.resizer.Dragging() {
+		t.Fatal("terminal width change must cancel the active gesture")
 	}
 }
 

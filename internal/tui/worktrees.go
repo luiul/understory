@@ -9,32 +9,15 @@ import (
 
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/mattn/go-runewidth"
 
 	"github.com/luiul/dashkit/loam"
 	"github.com/luiul/dashkit/sieve"
+	"github.com/luiul/dashkit/trellis"
 	"github.com/luiul/understory/internal/worktree"
 )
 
-// worktreeColWidth constants for the view's columns. repoColWidth and
-// branchColWidth are only floors (see repoColumnWidth/branchColumnWidth):
-// the Repo and Branch columns each grow to fit whichever displayed
-// label/branch name is longest, so a long owner/repo name or branch name
-// is never truncated the way a fixed width would — as long as the
-// terminal actually has room for everything (see worktreeColumns for
-// what gives when it doesn't). Created/Worktree/Merge/VS Code stay
-// fixed; Path gets whatever's left after all of those, floored at
-// minPathWidth.
-//
-// Every fixed width is at least its header title's width plus one: the
-// header's column-border glyph (loam.DrawHeaderBorders) sits immediately
-// right of each column's content area, so a column exactly as wide as
-// its title would render as "Title│" with the border touching the text
-// ("Worktree" in an 8-wide column did exactly that). hardMinColWidth is
-// the last-resort floor for the growable columns and Path on a
-// genuinely cramped terminal: below it a column stops showing anything
-// recognizable at all, so the layout would rather overflow (and let the
-// terminal clip) than crush further.
+// Readable widths leave room between each header title and its border.
+// Repo, Branch, and Path share surplus space after plain content fits.
 const (
 	repoColWidth     = 16
 	branchColWidth   = 20
@@ -46,22 +29,11 @@ const (
 	hardMinColWidth  = 8
 )
 
-// createdContentWidth, worktreeContentWidth, mergeContentWidth, and
-// vscodeContentWidth are the widest values the Created/Worktree/Merge/
-// VS Code columns ever display: humanizeSince tops out at "23h59m" (6)
-// before switching to "%dd", the working-tree states are all five
-// letters, "unmerged" and "conflict" tie for the longest merge status
-// at eight, and the VS Code states top out at "open" (4). These are the
-// columns' drag minimums (see columnMinWidths): a user dragging one of
-// them narrower than its default truncates the header title
-// ("Worktre…") but never a value — the same "a drag is a deliberate
-// choice" deal Repo/Branch get, which is what makes their borders
-// draggable at all (at the default width both sides of the border would
-// already sit at their minimums, leaving zero room to trade in either
-// direction).
+// Hard floors apply to automatic layouts and mouse drags alike.
+// Worktree needs six cells for "parked", not just five for "clean".
 const (
 	createdContentWidth  = 6
-	worktreeContentWidth = 5
+	worktreeContentWidth = 6
 	mergeContentWidth    = 8
 	vscodeContentWidth   = 4
 )
@@ -89,12 +61,11 @@ const (
 // width if that's wider. Every entry is measured, not just the ones whose
 // label actually renders (buildWorktreeRows blanks a repeated label within
 // a group), since the un-blanked first row of that same group still needs
-// room for it. runewidth.StringWidth (not len) so a multi-byte owner/repo
-// name is measured the same way bubbles/table itself lays out cells.
+// room for it. ContentWidth uses the table's display cells, not bytes.
 func repoColumnWidth(worktrees []worktree.Entry) int {
 	width := repoColWidth
 	for _, w := range worktrees {
-		if lw := runewidth.StringWidth(repoLabel(w)); lw > width {
+		if lw := trellis.ContentWidth(repoLabel(w)); lw > width {
 			width = lw
 		}
 	}
@@ -125,147 +96,68 @@ func branchLabel(w worktree.Entry) string {
 func branchColumnWidth(worktrees []worktree.Entry) int {
 	width := branchColWidth
 	for _, w := range worktrees {
-		if lw := runewidth.StringWidth(branchLabel(w)); lw > width {
+		if lw := trellis.ContentWidth(branchLabel(w)); lw > width {
 			width = lw
 		}
 	}
 	return width
 }
 
-// worktreeColumns builds the view's columns for the given terminal width
-// and worktree set: Repo and Branch each grow to fit their widest
-// displayed value (see repoColumnWidth/branchColumnWidth),
-// Created/Worktree/Merge are fixed width, and Path fills whatever's
-// left.
-//
-// overrides carries forward the widths a mouse drag (see
-// github.com/luiul/dashkit/trellis and Model.colOverrides' own doc) has
-// pinned, keyed by the Column indexes above — same map Model.colOverrides
-// holds. An override applies absolutely, in both directions: a drag is a
-// deliberate choice, so a column the user narrowed stays narrow across
-// polls even when a freshly polled longer label/branch name would have
-// grown it (the name truncates with an ellipsis until the user drags it
-// wider again or resizes the terminal, which clears every override —
-// see Update). Columns without an override keep their natural sizing.
-// Path never takes an override at all: it always absorbs whatever's
-// left after every other column's own effective (possibly overridden)
-// width is accounted for, the same invariant a mouse drag itself already
-// keeps (see trellis.Model.Handle's doc) — the row's total width never
-// changes no matter which column a user actually resized.
-//
-// When the terminal is too narrow for all of the above at once, the
-// table must never overflow the terminal width (a wider-than-terminal
-// table just gets its right edge — Path — clipped away by the terminal,
-// which is exactly the bug this ordering exists to avoid). What gives,
-// in order: first Repo/Branch shed their growth, water-filled
-// largest-first down to their default floors (see reclaimWidth), so the
-// longest labels truncate before anything else does; then Path dips
-// below minPathWidth, down to hardMinColWidth; then Repo/Branch dip
-// below their own floors, down to hardMinColWidth too. Beyond that the
-// terminal is simply too narrow for six columns and the overflow is
-// accepted. Columns pinned by an override are never auto-shrunk: the
-// user's explicit division of space wins, and Path absorbs whatever
-// that leaves.
-func worktreeColumns(width int, worktrees []worktree.Entry, overrides map[int]int) []table.Column {
+// worktreeColumnPolicies measures plain labels before filtering and group blanking.
+// Repo and Branch receive content space before Path. Compact fields fit their
+// readable defaults or current real values, without row tags or placeholders.
+func worktreeColumnPolicies(worktrees []worktree.Entry, home string, now time.Time, vscode map[string]vscodeState) []trellis.ColumnPolicy {
+	policies := []trellis.ColumnPolicy{
+		{Minimum: repoColWidth, HardMinimum: hardMinColWidth, Preferred: repoColumnWidth(worktrees), Weight: 1, ShrinkPriority: 1},
+		{Minimum: branchColWidth, HardMinimum: hardMinColWidth, Preferred: branchColumnWidth(worktrees), Weight: 2, ShrinkPriority: 1},
+		{Minimum: createdColWidth, HardMinimum: createdContentWidth, Preferred: createdColWidth},
+		{Minimum: worktreeColWidth, HardMinimum: worktreeContentWidth, Preferred: worktreeColWidth},
+		{Minimum: mergeColWidth, HardMinimum: mergeContentWidth, Preferred: mergeColWidth},
+		{Minimum: vscodeColWidth, HardMinimum: vscodeContentWidth, Preferred: vscodeColWidth},
+		{Minimum: minPathWidth, HardMinimum: hardMinColWidth, Preferred: minPathWidth, Weight: 2, ShrinkPriority: 2},
+	}
+	for _, w := range worktrees {
+		labels := []string{
+			humanizeSince(now.Sub(w.CreatedTime)),
+			worktreeStatusLabel(w),
+			mergeStatusLabel(w),
+			vscodeCell(vscode[w.Path]),
+			shortenHome(w.Path, home),
+		}
+		for i, label := range labels {
+			col := colCreated + i
+			policies[col].Preferred = max(policies[col].Preferred, trellis.ContentWidth(label))
+		}
+	}
+	return policies
+}
+
+// worktreeColumns delegates both automatic sizing and manual proportions to trellis.
+// The caller shows a warning when even the hard floors cannot fit.
+func worktreeColumns(width int, policies []trellis.ColumnPolicy, preferences trellis.Preferences) ([]table.Column, bool) {
 	cols := []table.Column{
-		{Title: "Repo", Width: repoColumnWidth(worktrees)},
-		{Title: "Branch", Width: branchColumnWidth(worktrees)},
-		{Title: "Created", Width: createdColWidth},
-		{Title: "Worktree", Width: worktreeColWidth},
-		{Title: "Merge", Width: mergeColWidth},
-		{Title: "VS Code", Width: vscodeColWidth},
+		{Title: "Repo"},
+		{Title: "Branch"},
+		{Title: "Created"},
+		{Title: "Worktree"},
+		{Title: "Merge"},
+		{Title: "VS Code"},
+		{Title: "Path"},
 	}
-
-	used := 0
-	for i := range cols {
-		if w, ok := overrides[i]; ok {
-			cols[i].Width = w
-		}
-		used += cols[i].Width
-	}
-
-	// bubbles/table pads every cell with one space on each side (see
-	// loam.ColumnOffsets), so a row's rendered width is the sum of the
-	// column widths plus 2 per column, Path included.
-	avail := width - 2*(len(cols)+1)
-
-	// Stage 1: Repo/Branch give up their growth over their default floors.
-	used -= reclaimWidth(cols, overrides, map[int]int{colRepo: repoColWidth, colBranch: branchColWidth}, used+minPathWidth-avail)
-
-	// Path dipping below minPathWidth needs no code of its own: it's
-	// simply whatever's left. But below even the hard floor, Repo/Branch
-	// give up their default floors too, down to the same hard floor.
-	pathWidth := avail - used
-	if pathWidth < hardMinColWidth {
-		used -= reclaimWidth(cols, overrides, map[int]int{colRepo: hardMinColWidth, colBranch: hardMinColWidth}, hardMinColWidth-pathWidth)
-		pathWidth = avail - used
-		if pathWidth < hardMinColWidth {
-			pathWidth = hardMinColWidth // accept the overflow past this point
-		}
-	}
-	return append(cols, table.Column{Title: "Path", Width: pathWidth})
+	widths, fits := preferences.Allocate(width, policies)
+	return trellis.Apply(cols, widths), fits
 }
 
-// reclaimWidth shrinks the growable columns (Repo/Branch), widest first,
-// until it has reclaimed need columns of terminal width or every
-// unpinned one has reached its floor, and returns the amount actually
-// reclaimed. Shrinking the currently-widest column one cell at a time
-// (rather than, say, always draining Branch first) equalizes the two
-// from the top, so truncation always hits whichever displayed value is
-// longest first regardless of which column it sits in. A column pinned
-// by an override is never touched: the user set that width by hand.
-func reclaimWidth(cols []table.Column, overrides map[int]int, floors map[int]int, need int) int {
-	reclaimed := 0
-	for reclaimed < need {
-		target := -1
-		for _, i := range []int{colRepo, colBranch} {
-			if _, pinned := overrides[i]; pinned {
-				continue
-			}
-			if cols[i].Width <= floors[i] {
-				continue
-			}
-			if target == -1 || cols[i].Width > cols[target].Width {
-				target = i
-			}
-		}
-		if target == -1 {
-			break
-		}
-		cols[target].Width--
-		reclaimed++
-	}
-	return reclaimed
-}
-
-// columnMinWidths returns each column's own minimum width, in the same
-// order/index worktreeColumns builds them, for trellis' mouse-resize
-// handling (see Update's tea.MouseMsg case). Repo and Branch floor at
-// their default widths, NOT their current content-grown width: pinning
-// the floor at the content width would freeze every border at its
-// current position (both columns always exactly fit their content, so
-// neither ever has room to give), which is precisely what made column
-// resizing a no-op before. Created/Worktree/Merge floor at their
-// CONTENT widths (see the createdContentWidth block), not their
-// title-sized defaults: their values are bounded and always fit, while
-// their defaults only add room for the title — so a drag can narrow
-// them past the default (truncating the title, never a value) to make
-// room for Path or a grown Repo/Branch, and every border on the table
-// can move in both directions as long as its two columns aren't both
-// already floored. Any drag that narrows a column is the user's
-// explicit choice, and it sticks (see worktreeColumns' override
-// handling). Path floors at minPathWidth, the same one worktreeColumns'
-// own leftover-space computation respects whenever the terminal has the
-// room.
+// columnMinWidths matches the policy hard floors, including "parked".
 func columnMinWidths() []int {
 	return []int{
-		repoColWidth,
-		branchColWidth,
+		hardMinColWidth,
+		hardMinColWidth,
 		createdContentWidth,
 		worktreeContentWidth,
 		mergeContentWidth,
 		vscodeContentWidth,
-		minPathWidth,
+		hardMinColWidth,
 	}
 }
 
@@ -803,32 +695,18 @@ func (m Model) selectedPath() string {
 	return displayed[idx].Path
 }
 
-// redisplay rebuilds the table's columns and rows from the current
-// worktree set, keeping whichever worktree (by path) was previously
-// selected selected. Columns are rebuilt on every redisplay, not just in
-// resize: repoColumnWidth/branchColumnWidth depend on the worktree set
-// itself, so a freshly polled repo with a longer owner/repo label or
-// branch name needs the Repo/Branch column widened immediately, not just
-// on the next terminal resize. Also called directly when the displayed
-// set changes without a poll (the m key toggling showMain). previousPath
-// is the selection to preserve, captured by the caller BEFORE whatever
-// change prompted the redisplay (applyWorktrees must read it from the
-// old worktree set, before swapping m.worktrees).
+// redisplay preserves selection by path and refreshes rows after a poll or filter.
+// Automatic layouts fit new content. Manual layouts keep their proportions.
+// An active drag freezes columns until release, even when new rows arrive.
+// The caller captures previousPath before changing the worktree set.
 func (m *Model) redisplay(previousPath string) {
 	oldCursor := clampCursor(m.table.Cursor(), len(m.displayedWorktrees()))
 
 	newDisplayed := m.displayedWorktrees()
 	m.cursor = resolveWorktreeCursor(newDisplayed, previousPath, oldCursor)
 
-	// Clear rows before changing columns: see resize's own comment on why
-	// (bubbles/table re-renders immediately against whatever's currently
-	// set, so a column/row count mismatch mid-update panics).
-	m.table.SetRows(nil)
-	// Columns size off visibleWorktrees (the set before the text
-	// filter), not newDisplayed: Repo/Branch grow to fit their widest
-	// value, and the filter changes the displayed set on every
-	// keystroke — sizing off it would resize the table mid-query.
-	m.table.SetColumns(worktreeColumns(m.width, m.visibleWorktrees(), m.colOverrides))
+	// Size before the text filter so typing cannot move column borders.
+	m.allocateColumns()
 	m.table.SetRows(buildWorktreeRows(newDisplayed, m.cursor, m.home, time.Now(), m.vscode, m.filterQuery, m.placeholder()))
 	m.table.SetCursor(m.cursor)
 }

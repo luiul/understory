@@ -238,26 +238,11 @@ type Model struct {
 
 	table table.Model
 
-	// resizer tracks an in-progress mouse column-border drag (see
-	// github.com/luiul/dashkit/trellis); colOverrides remembers the
-	// resulting width of the two columns each drag has actually moved (a
-	// drag always moves two adjacent columns at once; see trellis.Model.
-	// Handle's own doc), by column index (see the Column indexes in
-	// worktrees.go). Only the dragged pair is ever recorded: recording
-	// every column's current width would pin columns the user never
-	// touched, freezing Repo/Branch's grow-to-fit sizing the moment any
-	// single drag happens. worktreeColumns applies these absolutely (see
-	// its own doc — a drag is a deliberate pin, in both directions) every
-	// time columns are rebuilt, so a fresh poll doesn't silently discard
-	// an earlier resize. Cleared whenever a WindowSizeMsg arrives (see
-	// Update): a genuinely new terminal width invalidates the old
-	// distribution of space entirely, so resize starts fresh rather than
-	// fighting stale overrides sized for a different width. Path never
-	// carries an override that worktreeColumns applies — same as canopy's
-	// own Location, it always absorbs whatever's left over after every
-	// other column's own effective width is accounted for.
-	colOverrides map[int]int
-	resizer      trellis.Model
+	// Preferences keep desired proportions through polls and terminal resizes.
+	// The resizer owns only the active gesture, which freezes geometry.
+	preferences trellis.Preferences
+	resizer     trellis.Model
+	layoutFits  bool
 
 	notification  string
 	notifyIsError bool
@@ -318,8 +303,9 @@ func newLivePoll() *livePoll {
 // whether each repo's main worktree (Entry.IsMain) is included in the
 // view; see displayedWorktrees' doc.
 func New(interval time.Duration, showMain bool) Model {
+	cols, fits := worktreeColumns(0, worktreeColumnPolicies(nil, "", time.Now(), nil), trellis.Preferences{})
 	t := table.New(
-		table.WithColumns(worktreeColumns(0, nil, nil)),
+		table.WithColumns(cols),
 		table.WithFocused(true),
 		table.WithHeight(15),
 	)
@@ -341,6 +327,7 @@ func New(interval time.Duration, showMain bool) Model {
 		showMain:     showMain,
 		table:        t,
 		resizer:      trellis.New(),
+		layoutFits:   fits,
 		filterInput:  fi,
 		pollInFlight: true, // Init always starts the first poll; Init's value receiver can't mark it, so New does
 	}
@@ -603,15 +590,21 @@ func (m *Model) notify(text string, isErr bool) tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		widthChanged := msg.Width != m.width
+		if widthChanged {
+			// Cancel against the old geometry before projecting the new width.
+			m.resizer.Cancel()
+		}
 		m.width, m.height = msg.Width, msg.Height
-		// A new terminal width invalidates whatever distribution of space a
-		// prior drag settled on — resize is about to recompute every column
-		// from scratch against the new width, so any stale override is
-		// dropped first rather than fighting that recompute.
-		m.colOverrides = nil
-		m.table.SetWidth(msg.Width)
-		m.table.SetHeight(clampInt(msg.Height-6, 3, 1000))
-		m.resize()
+		if widthChanged {
+			m.table.SetWidth(msg.Width)
+			m.resize()
+		}
+		headerHeight := 6
+		if m.width > 0 && !m.layoutFits {
+			headerHeight++
+		}
+		m.table.SetHeight(clampInt(msg.Height-headerHeight, 3, 1000))
 		return m, nil
 
 	case tea.MouseMsg:
@@ -619,24 +612,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// owns the footer and the help overlay replaces the table, so a
 		// drag's target row isn't even on screen.
 		if m.helpOpen || m.confirm.Active() {
+			m.settleDrag()
 			return m, nil
 		}
 		_, originY := m.renderHeader()
 		cols := m.table.Columns()
+		wasDragging := m.resizer.Dragging()
 		widths, changed := m.resizer.Handle(msg, cols, columnMinWidths(), 0, originY)
 		if changed {
-			if m.colOverrides == nil {
-				m.colOverrides = map[int]int{}
-			}
-			// A drag always moves the dragged column and its right-hand
-			// neighbor together (see trellis.Model.Handle's own doc), so
-			// both of their new widths need remembering — and no others:
-			// recording every column's width would pin columns this drag
-			// never touched (see colOverrides' own doc).
-			dragged := m.resizer.DragColumn()
-			m.colOverrides[dragged] = widths[dragged]
-			m.colOverrides[dragged+1] = widths[dragged+1]
+			policies := worktreeColumnPolicies(m.visibleWorktrees(), m.home, time.Now(), m.vscode)
+			m.preferences.Capture(widths, policies, m.resizer.DragColumn())
 			m.table.SetColumns(trellis.Apply(cols, widths))
+		}
+		if wasDragging && !m.resizer.Dragging() {
+			// Release or lost-button motion applies content that arrived mid-drag.
+			m.resize()
 		}
 		return m, nil
 
@@ -778,6 +768,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.notify("hiding main worktrees", false)
 		case "?":
+			m.settleDrag()
 			m.helpOpen = true
 			return m, nil
 		default:
@@ -986,18 +977,35 @@ func (m *Model) refreshCursorMarker() {
 	m.table.SetRows(buildWorktreeRows(m.displayedWorktrees(), m.cursor, m.home, time.Now(), m.vscode, m.filterQuery, m.placeholder()))
 }
 
-// resize rebuilds columns (Path's width depends on m.width) and rows for
-// the new terminal width, preserving whatever the live cursor currently
-// is.
+// settleDrag prevents a modal from swallowing the release and freezing polls.
+func (m *Model) settleDrag() {
+	if m.resizer.Dragging() {
+		m.resizer.Cancel()
+		m.resize()
+	}
+}
+
+// allocateColumns measures the unfiltered visible set and preserves safe updates.
+// Polls may change rows during a drag but cannot move its border geometry.
+func (m *Model) allocateColumns() {
+	if m.resizer.Dragging() {
+		return
+	}
+	policies := worktreeColumnPolicies(m.visibleWorktrees(), m.home, time.Now(), m.vscode)
+	cols, fits := worktreeColumns(m.width, policies, m.preferences)
+	rows := m.table.Rows()
+	// Both setters render immediately. Remove rows before changing columns.
+	m.table.SetRows(nil)
+	m.table.SetColumns(cols)
+	m.table.SetRows(rows)
+	m.layoutFits = fits
+}
+
+// resize rebuilds the layout and rows while keeping the current selection.
 func (m *Model) resize() {
 	cursor := clampCursor(m.table.Cursor(), len(m.displayedWorktrees()))
 	m.cursor = cursor
-	// Clear rows before changing columns: bubbles/table re-renders
-	// immediately on both SetColumns and SetRows against whatever's
-	// currently set, so swapping to a column count the old rows don't
-	// match panics if the two are ever briefly out of sync mid-update.
-	m.table.SetRows(nil)
-	m.table.SetColumns(worktreeColumns(m.width, m.visibleWorktrees(), m.colOverrides))
+	m.allocateColumns()
 	m.table.SetRows(buildWorktreeRows(m.displayedWorktrees(), cursor, m.home, time.Now(), m.vscode, m.filterQuery, m.placeholder()))
 	m.table.SetCursor(cursor)
 }
@@ -1017,6 +1025,10 @@ func (m Model) renderHeader() (text string, tableOriginY int) {
 	lines := 1
 	if summary := m.summaryLine(); summary != "" {
 		text += "\n" + summary
+		lines++
+	}
+	if m.width > 0 && !m.layoutFits {
+		text += "\n" + errorStyle.Render("terminal too narrow: widen to at least 62 columns")
 		lines++
 	}
 	return text, lines + 1 // +1 for the blank separator line View puts before the table

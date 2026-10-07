@@ -82,13 +82,9 @@ with rows grouped by repo, most of a block's rows look alike (blank Repo
 cell, similar Branch/Worktree/Merge text), so a highlighted row is much
 easier to keep track of while scrolling than a single character off to
 the side. Path shortens a leading home-directory prefix to `~`, same as
-your shell prompt. Repo and Branch each grow to fit whichever label or
-branch name is longest across the currently displayed worktrees, rather
-than a fixed width, so a long name is never truncated as long as the
-terminal has room for everything; on one that doesn't, Repo/Branch shed
-that growth first (longest-first, so truncation hits the longest values
-first) and only then does Path dip below its own preferred width — the
-table never overflows the terminal's right edge. Branch appends ` @ <segment>/`
+your shell prompt. Columns use the full terminal width. Repo, Branch, and Path first receive space for their displayed text. Repo and Branch have higher content priority than Path. Once that text fits, these columns share spare space with weights of 1:2:2. Created, Worktree, Merge, and VS Code stay compact. On narrow terminals, text columns shrink before compact fields. Every column keeps a hard minimum. Below 62 terminal columns, a clear warning asks you to widen the window. No columns disappear. Text filtering does not change column widths.
+
+Branch appends ` @ <segment>/`
 when `wt` reports the worktree as a branch_worktree_mismatch: the
 directory was created for another branch (the `<segment>` in its path)
 and later `git switch`ed by hand, so the row is keyed by its checked-out
@@ -114,26 +110,11 @@ exact same already-open check Enter's open-or-focus runs (see below),
 so `open` means Enter would focus that window rather than open a new
 one.
 
-Each internal column border can be dragged with the mouse to widen or
-narrow it: the two columns it sits between trade width between
-themselves, so the table's own total width never changes, only how it's
-divided up between whichever two columns you actually grabbed (see
-[`github.com/luiul/dashkit/trellis`](https://github.com/luiul/dashkit/tree/main/trellis),
-the same package canopy uses for its own table). A visible divider marks
-each border on the header row (see
-[`github.com/luiul/dashkit/loam`](https://github.com/luiul/dashkit/tree/main/loam)'s
-`DrawHeaderBorders`) so there's something to aim the drag at, rather than
-an invisible 2-space gap. Every border can move in both directions:
-each column can shrink down to the width its values still fit (Repo/
-Branch their defaults, Created/Worktree/Merge/VS Code their widest
-possible value — a narrower drag truncates only the header title, never
-a value), and Path down to its own floor. A resize sticks across polls:
-the dragged column's width is pinned exactly where you left it, even
-when a freshly polled longer label would have grown it (the label
-ellipsizes until you drag wider again) — only a terminal resize resets
-every column, since that already recomputes Path's own width from
-scratch against the new terminal width anyway. Columns you never
-dragged keep their automatic sizing.
+Each internal column border can be dragged with the mouse. The two neighboring columns trade width, so the table's total width stays unchanged. Visible dividers on the header row show where to grab. The shared [`trellis`](https://github.com/luiul/dashkit/tree/main/trellis) and [`loam`](https://github.com/luiul/dashkit/tree/main/loam) packages handle these gestures and dividers for both understory and canopy.
+
+A changed drag saves your desired proportions for this session. Repo, Branch, and Path then keep those proportions across polls instead of growing to fit new text. Longer labels truncate with an ellipsis. Compact columns stay compact unless you deliberately widen one into the proportional pool. Each column can shrink to its hard minimum. Worktree keeps six cells so `parked` still fits. Terminal width changes preserve your preferences and project them onto the new width. A wide, narrow, wide cycle restores the same layout without drift. Height-only changes keep the columns and active gesture unchanged.
+
+Polls still update rows during an active drag, but column geometry stays frozen until release. A terminal width change cancels the gesture before it resizes the table. Preferences live in memory only. Restart understory to return to automatic sizing.
 
 Enter opens (or, if a window is already open on that path, focuses) a VS
 Code window there via [`github.com/luiul/dashkit/mycelium`](https://github.com/luiul/dashkit/tree/main/mycelium)'s

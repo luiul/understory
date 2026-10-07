@@ -116,6 +116,7 @@ func (m *Model) parkOrUnparkCmd() tea.Cmd {
 		return parkCmd(w, true)
 	}
 	if w.Dirty {
+		m.settleDrag()
 		return m.confirm.Arm(confirmState{kind: confirmParkOne, entries: []worktree.Entry{w}})
 	}
 	return parkCmd(w, false)
@@ -151,6 +152,7 @@ func (m *Model) startConfirm(kind confirmKind) tea.Cmd {
 		if w.IsMain {
 			return m.notify("can't remove a repo's main worktree", true)
 		}
+		m.settleDrag()
 		return m.confirm.Arm(confirmState{kind: kind, entries: []worktree.Entry{w}})
 	case confirmPruneStale:
 		var stale []worktree.Entry
@@ -165,6 +167,7 @@ func (m *Model) startConfirm(kind confirmKind) tea.Cmd {
 		if len(stale) == 0 {
 			return m.notify("no stale worktrees to prune", false)
 		}
+		m.settleDrag()
 		return m.confirm.Arm(confirmState{kind: kind, entries: stale})
 	case confirmRemoveMerged:
 		w, ok := m.selectedWorktree()
@@ -181,6 +184,7 @@ func (m *Model) startConfirm(kind confirmKind) tea.Cmd {
 		if len(merged) == 0 {
 			return m.notify("no merged worktrees for "+label, false)
 		}
+		m.settleDrag()
 		return m.confirm.Arm(confirmState{kind: kind, entries: merged, repo: label})
 	}
 	return nil
