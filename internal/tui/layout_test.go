@@ -127,7 +127,7 @@ func TestWorktreePoliciesMeasurePlainUnicodeLabelsAndShortenedPaths(t *testing.T
 	w.Owner, w.Repo = strings.Repeat("界", 8), strings.Repeat("e\u0301", 7)
 	w.Mismatch = true
 	entries := []worktree.Entry{w, w}
-	rows := buildWorktreeRows(entries, 1, "/home/alex", time.Now(), nil, "", "")
+	rows := buildWorktreeRows(entries, 1, "/home/alex", 0, time.Now(), nil, "", "")
 	if rows[1][colRepo] != "" {
 		t.Fatal("fixture must include a blank repeated group label")
 	}

@@ -82,7 +82,10 @@ with rows grouped by repo, most of a block's rows look alike (blank Repo
 cell, similar Branch/Worktree/Merge text), so a highlighted row is much
 easier to keep track of while scrolling than a single character off to
 the side. Path shortens a leading home-directory prefix to `~`, same as
-your shell prompt. Columns use the full terminal width. Repo, Branch, and Path first receive space for their displayed text. Repo and Branch have higher content priority than Path. Once that text fits, these columns share spare space with weights of 1:2:2. Created, Worktree, Merge, and VS Code stay compact. On narrow terminals, text columns shrink before compact fields. Every column keeps a hard minimum. Below 62 terminal columns, a clear warning asks you to widen the window. No columns disappear. Text filtering does not change column widths.
+your shell prompt, and when the column is too narrow it truncates the
+*head* (`…speed-up-ci/global-ops`), because the tail is what identifies
+the worktree — the head is the same `~/worktrees/…` prefix on nearly
+every row. Columns use the full terminal width. Repo, Branch, and Path first receive space for their displayed text. Repo and Branch have higher content priority than Path. Once that text fits, these columns share spare space with weights of 1:2:2. Created, Worktree, Merge, and VS Code stay compact. On narrow terminals, text columns shrink before compact fields. Every column keeps a hard minimum. Below 62 terminal columns, a clear warning asks you to widen the window. No columns disappear. Text filtering does not change column widths.
 
 Branch appends ` @ <segment>/`
 when `wt` reports the worktree as a branch_worktree_mismatch: the

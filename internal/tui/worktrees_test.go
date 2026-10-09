@@ -147,7 +147,7 @@ func TestApplyWorktreesKeepsThePreviouslySelectedPathSelected(t *testing.T) {
 }
 
 func TestBuildWorktreeRowsPlaceholderWhenEmpty(t *testing.T) {
-	rows := buildWorktreeRows(nil, 0, "", time.Now(), nil, "", "nothing to show")
+	rows := buildWorktreeRows(nil, 0, "", 0, time.Now(), nil, "", "nothing to show")
 	if len(rows) != 1 {
 		t.Fatalf("got %d rows, want 1 placeholder row", len(rows))
 	}
@@ -175,7 +175,7 @@ func TestBuildWorktreeRowsCreatedColumnUsesCreatedTimeNotCommitTime(t *testing.T
 		CreatedTime: time.Now().Add(-3 * 24 * time.Hour),
 	}
 
-	rows := buildWorktreeRows([]worktree.Entry{w}, -1, "", time.Now(), nil, "", "")
+	rows := buildWorktreeRows([]worktree.Entry{w}, -1, "", 0, time.Now(), nil, "", "")
 
 	if got := rows[0][colCreated]; got != "3d" {
 		t.Fatalf("got %q, want \"3d\" (from CreatedTime, not CommitTime's ~0s)", got)
@@ -183,7 +183,7 @@ func TestBuildWorktreeRowsCreatedColumnUsesCreatedTimeNotCommitTime(t *testing.T
 }
 
 func TestBuildWorktreeRowsTagsTheCursorRowsCreatedCell(t *testing.T) {
-	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), wtEntry("/w/b", "b", 0)}, 1, "", time.Now(), nil, "", "")
+	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), wtEntry("/w/b", "b", 0)}, 1, "", 0, time.Now(), nil, "", "")
 	if strings.Contains(rows[0][colCreated], cursorSentinel) {
 		t.Fatalf("got cursorSentinel on non-cursor row 0's Created cell %q, want it absent", rows[0][colCreated])
 	}
@@ -196,7 +196,7 @@ func TestBuildWorktreeRowsTagsAParkedRowsCreatedCell(t *testing.T) {
 	parked := wtEntry("/w/parked", "parked", time.Hour)
 	parked.ParkedAt = time.Now() // marked after its last commit: no follow-up since
 
-	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), parked}, 0, "", time.Now(), nil, "", "")
+	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), parked}, 0, "", 0, time.Now(), nil, "", "")
 
 	if strings.Contains(rows[0][colCreated], parkedMarker) {
 		t.Fatalf("got parkedMarker on non-parked row 0's Created cell %q, want it absent", rows[0][colCreated])
@@ -215,7 +215,7 @@ func TestBuildWorktreeRowsLeavesAStaleParkedRowUntagged(t *testing.T) {
 	stale.Stale = true
 	stale.ParkedAt = time.Now()
 
-	rows := buildWorktreeRows([]worktree.Entry{stale}, 0, "", time.Now(), nil, "", "")
+	rows := buildWorktreeRows([]worktree.Entry{stale}, 0, "", 0, time.Now(), nil, "", "")
 
 	if strings.Contains(rows[0][colCreated], parkedMarker) {
 		t.Fatalf("got parkedMarker on a stale row's Created cell %q, want it absent (stale wins over parked)", rows[0][colCreated])
@@ -226,7 +226,7 @@ func TestBuildWorktreeRowsBlanksTheRepeatedRepoLabelWithinAGroup(t *testing.T) {
 	// Same repo (acme/widgets) back to back: only the first row should
 	// carry the label, so the group reads as one block instead of
 	// repeating the same text down every row.
-	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), wtEntry("/w/b", "b", time.Hour)}, 0, "", time.Now(), nil, "", "")
+	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), wtEntry("/w/b", "b", time.Hour)}, 0, "", 0, time.Now(), nil, "", "")
 	if rows[0][colRepo] != "acme/widgets" {
 		t.Fatalf("got %q, want the first row of a group to carry its repo label", rows[0][colRepo])
 	}
@@ -236,7 +236,7 @@ func TestBuildWorktreeRowsBlanksTheRepeatedRepoLabelWithinAGroup(t *testing.T) {
 }
 
 func TestBuildWorktreeRowsRelabelsWhenTheRepoChanges(t *testing.T) {
-	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), otherRepoEntry("/w/b", "b", time.Hour)}, 0, "", time.Now(), nil, "", "")
+	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/w/a", "a", 0), otherRepoEntry("/w/b", "b", time.Hour)}, 0, "", 0, time.Now(), nil, "", "")
 	if rows[0][colRepo] != "acme/widgets" || rows[1][colRepo] != "other/gizmos" {
 		t.Fatalf("got %q, %q, want both distinct repo labels shown", rows[0][colRepo], rows[1][colRepo])
 	}
@@ -273,7 +273,7 @@ func TestBuildWorktreeRowsShowsWorktreeAndMergeColumns(t *testing.T) {
 	w := wtEntry("/w/a", "a", 0)
 	w.Dirty = true
 	w.MergeStatus = worktree.MergeStatusUnmerged
-	rows := buildWorktreeRows([]worktree.Entry{w}, 0, "", time.Now(), nil, "", "")
+	rows := buildWorktreeRows([]worktree.Entry{w}, 0, "", 0, time.Now(), nil, "", "")
 	if rows[0][colWorktree] != "dirty" {
 		t.Fatalf("got %q, want the Worktree cell to read dirty", rows[0][colWorktree])
 	}
@@ -307,7 +307,7 @@ func TestBranchColumnWidthFundsTheMismatchSuffix(t *testing.T) {
 func TestBuildWorktreeRowsShowsTheMismatchSuffixInTheBranchCell(t *testing.T) {
 	w := wtEntry("/w/review-jamie/widgets", "feature/other", 0)
 	w.Mismatch = true
-	rows := buildWorktreeRows([]worktree.Entry{w}, 0, "", time.Now(), nil, "", "")
+	rows := buildWorktreeRows([]worktree.Entry{w}, 0, "", 0, time.Now(), nil, "", "")
 	if got, want := rows[0][colBranch], "feature/other @ review-jamie/"; got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
@@ -390,7 +390,7 @@ func TestBuildWorktreeRowsShowsTheVSCodeColumn(t *testing.T) {
 	entries := []worktree.Entry{wtEntry("/w/a", "a", 0), wtEntry("/w/b", "b", 0), wtEntry("/w/c", "c", 0)}
 	vscode := map[string]vscodeState{"/w/a": vscodeOpen, "/w/b": vscodeClosed}
 
-	rows := buildWorktreeRows(entries, 0, "", time.Now(), vscode, "", "")
+	rows := buildWorktreeRows(entries, 0, "", 0, time.Now(), vscode, "", "")
 
 	if got := rows[0][colVSCode]; got != "open" {
 		t.Fatalf("got %q, want %q", got, "open")
@@ -808,5 +808,30 @@ func TestSummaryLineNotesHiddenMainWorktrees(t *testing.T) {
 	m.showMain = true
 	if got := m.summaryLine(); strings.Contains(got, "main hidden") {
 		t.Fatalf("got %q, want no hidden-mains note while showMain is on", got)
+	}
+}
+
+func TestPathCellTextKeepsTheTail(t *testing.T) {
+	full := shortenHome("/Users/x/worktrees/hellofresh/speed-up-ci/global-ops", "")
+	if got := pathCellText("/Users/x/worktrees/hellofresh/speed-up-ci/global-ops", "", 200); got != full {
+		t.Fatalf("wide column must not truncate, got %q", got)
+	}
+	got := pathCellText("/Users/x/worktrees/hellofresh/speed-up-ci/global-ops", "", 20)
+	if !strings.HasPrefix(got, "…") || !strings.HasSuffix(got, "global-ops") {
+		t.Fatalf("truncation must keep the tail with a leading ellipsis, got %q", got)
+	}
+	if w := runewidth.StringWidth(got); w != 20 {
+		t.Fatalf("truncated width = %d, want exactly 20", w)
+	}
+	if got := pathCellText("/any/path", "", 0); got != "/any/path" {
+		t.Fatalf("unknown width (0) must leave the path alone, got %q", got)
+	}
+}
+
+func TestBuildWorktreeRowsTruncatesPathToTheGivenWidth(t *testing.T) {
+	rows := buildWorktreeRows([]worktree.Entry{wtEntry("/Users/x/worktrees/hellofresh/speed-up-ci/global-ops", "b", 0)}, 0, "", 20, time.Now(), nil, "", "")
+	got := rows[0][colPath]
+	if !strings.HasPrefix(got, "…") || !strings.HasSuffix(got, "global-ops") || runewidth.StringWidth(got) != 20 {
+		t.Fatalf("path cell = %q, want a 20-cell tail-keeping truncation", got)
 	}
 }

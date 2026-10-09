@@ -623,6 +623,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			policies := worktreeColumnPolicies(m.visibleWorktrees(), m.home, time.Now(), m.vscode)
 			m.preferences.Capture(widths, policies, m.resizer.DragColumn())
 			m.table.SetColumns(trellis.Apply(cols, widths))
+			// Path cells are pre-truncated to the column's width (see
+			// pathCellText), so a drag rebuilds the rows live: widening
+			// Path shows more of the tail as it happens.
+			m.refreshCursorMarker()
 		}
 		if wasDragging && !m.resizer.Dragging() {
 			// Release or lost-button motion applies content that arrived mid-drag.
@@ -974,7 +978,7 @@ func clampCursor(idx, n int) int {
 // waiting for the next poll.
 func (m *Model) refreshCursorMarker() {
 	m.cursor = clampCursor(m.table.Cursor(), len(m.displayedWorktrees()))
-	m.table.SetRows(buildWorktreeRows(m.displayedWorktrees(), m.cursor, m.home, time.Now(), m.vscode, m.filterQuery, m.placeholder()))
+	m.table.SetRows(buildWorktreeRows(m.displayedWorktrees(), m.cursor, m.home, m.pathWidth(), time.Now(), m.vscode, m.filterQuery, m.placeholder()))
 }
 
 // settleDrag prevents a modal from swallowing the release and freezing polls.
@@ -1006,7 +1010,7 @@ func (m *Model) resize() {
 	cursor := clampCursor(m.table.Cursor(), len(m.displayedWorktrees()))
 	m.cursor = cursor
 	m.allocateColumns()
-	m.table.SetRows(buildWorktreeRows(m.displayedWorktrees(), cursor, m.home, time.Now(), m.vscode, m.filterQuery, m.placeholder()))
+	m.table.SetRows(buildWorktreeRows(m.displayedWorktrees(), cursor, m.home, m.pathWidth(), time.Now(), m.vscode, m.filterQuery, m.placeholder()))
 	m.table.SetCursor(cursor)
 }
 

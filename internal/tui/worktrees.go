@@ -707,8 +707,20 @@ func (m *Model) redisplay(previousPath string) {
 
 	// Size before the text filter so typing cannot move column borders.
 	m.allocateColumns()
-	m.table.SetRows(buildWorktreeRows(newDisplayed, m.cursor, m.home, time.Now(), m.vscode, m.filterQuery, m.placeholder()))
+	m.table.SetRows(buildWorktreeRows(newDisplayed, m.cursor, m.home, m.pathWidth(), time.Now(), m.vscode, m.filterQuery, m.placeholder()))
 	m.table.SetCursor(m.cursor)
+}
+
+// pathWidth is the Path column's current content width, handed to
+// buildWorktreeRows so pathCellText can pre-truncate paths to it. 0 when
+// the table isn't built with understory's column set yet (buildWorktreeRows
+// treats it as "no truncation").
+func (m Model) pathWidth() int {
+	cols := m.table.Columns()
+	if colPath >= len(cols) {
+		return 0
+	}
+	return cols[colPath].Width
 }
 
 // selectedWorktree returns the worktree.Entry backing the currently
@@ -784,7 +796,7 @@ func vscodeCell(state vscodeState) string {
 // the same two plain-word signals coppice's own worktree table shows:
 // whether the working tree itself is dirty/clean/stale, and separately
 // whether the branch has been merged into main yet.
-func buildWorktreeRows(worktrees []worktree.Entry, cursor int, home string, now time.Time, vscode map[string]vscodeState, filterQuery, placeholder string) []table.Row {
+func buildWorktreeRows(worktrees []worktree.Entry, cursor int, home string, pathWidth int, now time.Time, vscode map[string]vscodeState, filterQuery, placeholder string) []table.Row {
 	if len(worktrees) == 0 {
 		// An active filter with zero matches says so (and how to back
 		// out) rather than claiming there are no worktrees at all — the
@@ -832,10 +844,24 @@ func buildWorktreeRows(worktrees []worktree.Entry, cursor int, home string, now 
 			worktreeStatusLabel(w),
 			mergeStatusLabel(w),
 			vscodeCell(vscode[w.Path]),
-			shortenHome(w.Path, home),
+			pathCellText(w.Path, home, pathWidth),
 		}
 	}
 	return rows
+}
+
+// pathCellText is the Path column's cell: the ~-shortened path
+// pre-truncated to the column's current width keeping the TAIL
+// (loam.TruncateHead — "…speed-up-ci/global-ops", not "~/worktrees/hello…"):
+// the head is the same prefix on nearly every row, while the tail is
+// what identifies the worktree. Pre-truncation is what makes the cut
+// point controllable at all (bubbles/table's own truncation keeps the
+// head); the width comes from the live column via buildWorktreeRows,
+// rebuilt on every poll, resize, and drag. Width allocation still
+// measures the full label (see worktreeColumnPolicies), and the filter
+// still matches the full path (see filterCells).
+func pathCellText(path, home string, width int) string {
+	return loam.TruncateHead(shortenHome(path, home), width)
 }
 
 // worktreeStatusLabel is the Worktree column's plain-word rendering of
