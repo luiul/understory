@@ -54,11 +54,11 @@ func defaultPollCachePath() string {
 // renders the ghostty column's last-known states too instead of
 // flashing "?" on every row for a poll.
 type pollCache struct {
-	Version      int                    `json:"version"`
-	SavedAt      time.Time              `json:"savedAt"`
-	Entries      []worktree.Entry       `json:"entries"`
+	Version       int                     `json:"version"`
+	SavedAt       time.Time               `json:"savedAt"`
+	Entries       []worktree.Entry        `json:"entries"`
 	Ghostty       map[string]ghosttyState `json:"ghostty"`
-	GhosttyStrict map[string]bool        `json:"ghosttyStrict"`
+	GhosttyStrict map[string]bool         `json:"ghosttyStrict"`
 }
 
 // loadPollCache reads the saved poll view, or returns nil on ANY
@@ -90,9 +90,9 @@ func savePollCache(entries []worktree.Entry, ghostty map[string]ghosttyState, st
 		return
 	}
 	data, err := json.Marshal(pollCache{
-		Version:      cacheVersion,
-		SavedAt:      time.Now(),
-		Entries:      entries,
+		Version:       cacheVersion,
+		SavedAt:       time.Now(),
+		Entries:       entries,
 		Ghostty:       ghostty,
 		GhosttyStrict: strict,
 	})

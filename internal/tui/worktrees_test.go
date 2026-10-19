@@ -741,13 +741,13 @@ func TestApplyPollResultsKeepsAFailedReposWindowStates(t *testing.T) {
 	m := New(999, false)
 	b := repoEntry("/repo/b", "/w/b", "b")
 	m.applyPollResults(pollResultMsg{
-		results:      []worktree.RepoResult{okResult("/repo/b", b)},
+		results:       []worktree.RepoResult{okResult("/repo/b", b)},
 		ghostty:       map[string]ghosttyState{"/w/b": ghosttyOpen},
 		ghosttyStrict: map[string]bool{"/w/b": true},
 	})
 
 	m.applyPollResults(pollResultMsg{
-		results:      []worktree.RepoResult{{RepoPath: "/repo/b", Err: errors.New("timed out")}},
+		results:       []worktree.RepoResult{{RepoPath: "/repo/b", Err: errors.New("timed out")}},
 		ghostty:       map[string]ghosttyState{},
 		ghosttyStrict: map[string]bool{},
 	})

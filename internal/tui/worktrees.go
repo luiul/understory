@@ -25,7 +25,7 @@ const (
 	modifiedColWidth = 9
 	worktreeColWidth = 9
 	mergeColWidth    = 9
-	ghosttyColWidth   = 8
+	ghosttyColWidth  = 8
 	minPathWidth     = 20
 	hardMinColWidth  = 8
 )
@@ -37,7 +37,7 @@ const (
 	modifiedContentWidth = 6
 	worktreeContentWidth = 6
 	mergeContentWidth    = 8
-	ghosttyContentWidth   = 4
+	ghosttyContentWidth  = 4
 )
 
 // Column indexes into both worktreeColumns' return value and each
@@ -774,8 +774,8 @@ const (
 	// the scripted app didn't respond) renders "?" — the listing can't
 	// claim "not open", so the cell never does either.
 	ghosttyUnknown ghosttyState = iota
-	ghosttyClosed              // checked, no window open on this worktree
-	ghosttyOpen                // a window is open on this worktree
+	ghosttyClosed               // checked, no window open on this worktree
+	ghosttyOpen                 // a window is open on this worktree
 )
 
 // ghosttyCell renders the Ghostty column's plain-word cell: "open", "-"
