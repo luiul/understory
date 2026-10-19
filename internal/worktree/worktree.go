@@ -105,6 +105,19 @@ type Entry struct {
 	// Dirty is true if the worktree has any staged, modified, untracked,
 	// renamed, or deleted change relative to its own HEAD.
 	Dirty bool
+	// ModifiedTime is when this worktree was last modified: the later of
+	// its HEAD commit time and the newest mtime among the files git sees
+	// as changed or untracked. That combination answers "when did someone
+	// last work here", which neither input does alone: a clean worktree's
+	// last modification is its last commit, while a worktree with fresh
+	// uncommitted edits must not read as stale just because its HEAD is
+	// old. Only a dirty worktree needs the file walk (one `git status`
+	// subprocess, see applyModifiedTime); a clean one takes CommitTime
+	// directly, so the poll's steady state pays nothing. Zero means
+	// unknown: a Stale entry's directory (and thus its files) is already
+	// gone, a Skeleton hasn't been polled yet, and a status failure with
+	// no commit time leaves nothing to report.
+	ModifiedTime time.Time
 	// Stale is true when `wt` reports this worktree's state as "prunable":
 	// its administrative git metadata still exists, but the working
 	// directory itself is gone (deleted by hand, moved, an OS temp dir
@@ -310,6 +323,7 @@ func listWorktrees(repoPath string) ([]Entry, int, error) {
 	applyRepoFallback(entries, repoPath)
 	applyCreatedTime(entries)
 	applyParked(entries, repoPath)
+	applyModifiedTime(entries)
 	return entries, skipped, nil
 }
 
@@ -350,6 +364,72 @@ func applyCreatedTime(entries []Entry) {
 			entries[i].CreatedTime = entries[i].CommitTime
 		}
 	}
+}
+
+// applyModifiedTime fills in Entry.ModifiedTime (mutating entries in
+// place): CommitTime alone for a clean worktree (its last modification
+// IS its last commit, and skipping the walk entirely is what keeps the
+// poll's steady state cheap — clean is the common case), and for a
+// dirty one the later of CommitTime and the newest mtime among the
+// files `git status` reports (see newestDirtyMTime). Best effort: a
+// status that fails (removed mid-poll, huge tree past the timeout)
+// leaves CommitTime standing rather than dropping the row's data, and a
+// Stale entry keeps ModifiedTime's zero value — its directory is already
+// gone, so both the walk and the question are moot. The same
+// definition coppice's own `_last_modified_ts` applies, so the two
+// tools must not drift apart here.
+func applyModifiedTime(entries []Entry) {
+	for i := range entries {
+		e := &entries[i]
+		if e.Stale {
+			continue
+		}
+		m := e.CommitTime
+		if e.Dirty {
+			if t, ok := newestDirtyMTime(e.Path); ok && t.After(m) {
+				m = t
+			}
+		}
+		e.ModifiedTime = m
+	}
+}
+
+// newestDirtyMTime reports the newest mtime among the worktree at path's
+// changed and untracked files, from one `git status --porcelain -z
+// --untracked-files=all --no-renames`. `-z` makes the records
+// NUL-separated with no quoting to undo, and `--no-renames` keeps each
+// side of what would be a rename its own record, so every record is
+// plain "XY <path>" and the path starts at byte 3. `--untracked-files=`
+// `all` enumerates files rather than naming their directories (a
+// directory's own mtime doesn't move when a file inside it is edited).
+// Stat failures (a deleted-in-worktree file, a broken symlink) skip the
+// file: they can't be the newest edit anyone made. ok=false when git
+// itself fails or reports nothing.
+func newestDirtyMTime(path string) (time.Time, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "git", "-C", path, "status", "--porcelain", "-z",
+		"--untracked-files=all", "--no-renames").Output()
+	if err != nil {
+		return time.Time{}, false
+	}
+	var newest time.Time
+	for _, rec := range strings.Split(string(out), "\x00") {
+		if len(rec) < 4 { // "XY " plus a non-empty path
+			continue
+		}
+		info, err := os.Stat(filepath.Join(path, rec[3:]))
+		if err != nil {
+			continue
+		}
+		if t := info.ModTime(); newest.IsZero() || t.After(newest) {
+			newest = t
+		}
+	}
+	if newest.IsZero() {
+		return time.Time{}, false
+	}
+	return newest, true
 }
 
 // applyRepoFallback fills in Repo (mutating entries in place) for any

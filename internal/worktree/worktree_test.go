@@ -569,3 +569,73 @@ func TestStreamAllReturnsANilChannelWhenNothingIsPolled(t *testing.T) {
 		t.Fatalf("got %v, want a nil channel for no repo paths", ch)
 	}
 }
+
+// --- last modified -------------------------------------------------------
+//
+// ModifiedTime's definition (the later of the HEAD commit time and the
+// newest mtime among changed/untracked files) is the one coppice's own
+// `_last_modified_ts` applies; these pin the read side so the two tools
+// can't drift apart.
+
+func TestApplyModifiedTimeTakesTheCommitTimeForACleanWorktree(t *testing.T) {
+	commit := time.Unix(1_700_000_000, 0)
+	entries := []Entry{{Path: "/w/a", CommitTime: commit}}
+	applyModifiedTime(entries)
+	if !entries[0].ModifiedTime.Equal(commit) {
+		t.Fatalf("got %v, want the commit time untouched for a clean worktree", entries[0].ModifiedTime)
+	}
+}
+
+func TestApplyModifiedTimeTakesTheNewestDirtyMTimeWhenItIsNewer(t *testing.T) {
+	dir := initRepo(t)
+	file := filepath.Join(dir, "scratch.txt")
+	if err := os.WriteFile(file, []byte("uncommitted"), 0o644); err != nil {
+		t.Fatalf("write an untracked file: %v", err)
+	}
+	edit := time.Now().Add(-1 * time.Hour)
+	if err := os.Chtimes(file, edit, edit); err != nil {
+		t.Fatalf("stamp the untracked file: %v", err)
+	}
+	entries := []Entry{{Path: dir, CommitTime: time.Now().Add(-48 * time.Hour), Dirty: true}}
+	applyModifiedTime(entries)
+	if !entries[0].ModifiedTime.Equal(edit) {
+		t.Fatalf("got %v, want the untracked file's mtime %v", entries[0].ModifiedTime, edit)
+	}
+}
+
+func TestApplyModifiedTimeKeepsTheCommitTimeWhenItIsNewerThanTheEdits(t *testing.T) {
+	dir := initRepo(t)
+	file := filepath.Join(dir, "scratch.txt")
+	if err := os.WriteFile(file, []byte("uncommitted"), 0o644); err != nil {
+		t.Fatalf("write an untracked file: %v", err)
+	}
+	edit := time.Now().Add(-72 * time.Hour)
+	if err := os.Chtimes(file, edit, edit); err != nil {
+		t.Fatalf("stamp the untracked file: %v", err)
+	}
+	commit := time.Now().Add(-1 * time.Hour)
+	entries := []Entry{{Path: dir, CommitTime: commit, Dirty: true}}
+	applyModifiedTime(entries)
+	if !entries[0].ModifiedTime.Equal(commit) {
+		t.Fatalf("got %v, want the newer commit time %v", entries[0].ModifiedTime, commit)
+	}
+}
+
+func TestApplyModifiedTimeLeavesAStaleEntryUnknown(t *testing.T) {
+	entries := []Entry{{Path: "/w/gone", CommitTime: time.Unix(1_700_000_000, 0), Dirty: true, Stale: true}}
+	applyModifiedTime(entries)
+	if !entries[0].ModifiedTime.IsZero() {
+		t.Fatalf("got %v, want the zero time for a stale entry", entries[0].ModifiedTime)
+	}
+}
+
+func TestApplyModifiedTimeFallsBackToTheCommitTimeWhenStatusFails(t *testing.T) {
+	// A dirty entry whose directory isn't a repo (removed mid-poll, or
+	// never was one) must keep the commit time rather than blanking out.
+	commit := time.Unix(1_700_000_000, 0)
+	entries := []Entry{{Path: t.TempDir(), CommitTime: commit, Dirty: true}}
+	applyModifiedTime(entries)
+	if !entries[0].ModifiedTime.Equal(commit) {
+		t.Fatalf("got %v, want the commit time as the fallback", entries[0].ModifiedTime)
+	}
+}
