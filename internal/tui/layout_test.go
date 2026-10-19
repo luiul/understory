@@ -46,12 +46,12 @@ func TestWorktreeColumnsExactAutomaticWidths(t *testing.T) {
 		width int
 		want  []int
 	}{
-		{100, []int{18, 26, 8, 9, 9, 8, 8}},
-		{110, []int{21, 33, 8, 9, 9, 8, 8}},
-		{120, []int{24, 40, 8, 9, 9, 8, 8}},
-		{140, []int{27, 46, 8, 9, 9, 8, 19}},
-		{180, []int{29, 50, 8, 9, 9, 8, 53}},
-		{240, []int{41, 74, 8, 9, 9, 8, 77}},
+		{100, []int{16, 17, 8, 9, 9, 9, 8, 8}},
+		{110, []int{18, 25, 8, 9, 9, 9, 8, 8}},
+		{120, []int{21, 32, 8, 9, 9, 9, 8, 8}},
+		{140, []int{27, 46, 8, 9, 9, 9, 8, 8}},
+		{180, []int{27, 46, 8, 9, 9, 9, 8, 48}},
+		{240, []int{39, 69, 8, 9, 9, 9, 8, 73}},
 	}
 	for _, tc := range cases {
 		t.Run(strconv.Itoa(tc.width), func(t *testing.T) {
@@ -74,11 +74,11 @@ func TestWorktreeColumnsExactAutomaticWidths(t *testing.T) {
 func TestAutomaticSurplusUsesOneTwoTwoWeightsAndCompactDefaults(t *testing.T) {
 	policies := worktreeColumnPolicies(nil, "", time.Now(), nil)
 	base, fits := worktreeColumns(104, policies, trellis.Preferences{})
-	if !fits || !reflect.DeepEqual(columnWidths(base), []int{16, 20, 8, 9, 9, 8, 20}) {
+	if !fits || !reflect.DeepEqual(columnWidths(base), []int{16, 20, 8, 9, 9, 9, 8, 9}) {
 		t.Fatalf("readable defaults = %v, fits %v", columnWidths(base), fits)
 	}
 	wide, fits := worktreeColumns(240, policies, trellis.Preferences{})
-	if !fits || !reflect.DeepEqual(columnWidths(wide), []int{43, 75, 8, 9, 9, 8, 74}) {
+	if !fits || !reflect.DeepEqual(columnWidths(wide), []int{41, 70, 8, 9, 9, 9, 8, 70}) {
 		t.Fatalf("weighted surplus = %v, fits %v", columnWidths(wide), fits)
 	}
 	for _, col := range base {
@@ -103,21 +103,21 @@ func TestWorktreeColumnsHardFloorBoundaries(t *testing.T) {
 		fits  bool
 		want  []int
 	}{
-		{61, false, []int{8, 8, 6, 6, 8, 4, 8}},
-		{62, true, []int{8, 8, 6, 6, 8, 4, 8}},
-		{63, true, []int{8, 8, 7, 6, 8, 4, 8}},
+		{69, false, []int{8, 8, 6, 6, 6, 8, 4, 8}},
+		{70, true, []int{8, 8, 6, 6, 6, 8, 4, 8}},
+		{71, true, []int{8, 8, 7, 6, 6, 8, 4, 8}},
 	} {
 		t.Run(strconv.Itoa(tc.width), func(t *testing.T) {
 			cols, fits := worktreeColumns(tc.width, policies, trellis.Preferences{})
 			if fits != tc.fits || !reflect.DeepEqual(columnWidths(cols), tc.want) {
 				t.Fatalf("widths = %v, fits = %v, want %v, %v", columnWidths(cols), fits, tc.want, tc.fits)
 			}
-			if got := tableWidth(cols); got != max(tc.width, 62) {
-				t.Fatalf("padded width = %d, want %d", got, max(tc.width, 62))
+			if got := tableWidth(cols); got != max(tc.width, minimumTableWidth()) {
+				t.Fatalf("padded width = %d, want %d", got, max(tc.width, minimumTableWidth()))
 			}
 		})
 	}
-	if got := columnMinWidths(); !reflect.DeepEqual(got, []int{8, 8, 6, 6, 8, 4, 8}) {
+	if got := columnMinWidths(); !reflect.DeepEqual(got, []int{8, 8, 6, 6, 6, 8, 4, 8}) {
 		t.Fatalf("drag floors = %v", got)
 	}
 }
@@ -176,7 +176,7 @@ func TestSizingUsesVisibleRowsBeforeFilterAndMeasuresGroupedLabels(t *testing.T)
 	hidden := wtEntry("/w/main", strings.Repeat("hidden", 60), 0)
 	hidden.IsMain = true
 	m.applyWorktrees([]worktree.Entry{short, long, repeated, hidden})
-	want := worktreeColumnPolicies(m.visibleWorktrees(), m.home, time.Now(), m.vscode)
+	want := worktreeColumnPolicies(m.visibleWorktrees(), m.home, time.Now(), m.ghostty)
 	if want[colBranch].Preferred != len(long.Branch) {
 		t.Fatal("hidden main content must not affect automatic sizing")
 	}
@@ -202,7 +202,7 @@ func TestWorktreePoliciesFitRealCompactContentWithoutPlaceholderOrTags(t *testin
 	w.CreatedTime = now.Add(-23*time.Hour - 59*time.Minute)
 	w.ParkedAt = now
 	w.MergeStatus = "needs-review"
-	policies := worktreeColumnPolicies([]worktree.Entry{w}, "", now, map[string]vscodeState{w.Path: vscodeOpen})
+	policies := worktreeColumnPolicies([]worktree.Entry{w}, "", now, map[string]ghosttyState{w.Path: ghosttyOpen})
 	if got := policies[colCreated].Preferred; got != 8 {
 		t.Fatalf("Created preferred = %d, want readable default 8", got)
 	}
@@ -216,7 +216,7 @@ func TestWorktreePoliciesFitRealCompactContentWithoutPlaceholderOrTags(t *testin
 	if !fits || cols[colMerge].Width != len("needs-review") {
 		t.Fatalf("compact Merge content not funded: %v, fits %v", columnWidths(cols), fits)
 	}
-	for _, col := range []int{colCreated, colWorktree, colVSCode} {
+	for _, col := range []int{colCreated, colWorktree, colGhostty} {
 		if cols[col].Width != policies[col].Minimum {
 			t.Fatalf("compact column %d stretched to %d", col, cols[col].Width)
 		}
@@ -303,12 +303,12 @@ func TestManualLayoutWideNarrowWideHasNoDrift(t *testing.T) {
 	m = sendMouse(m, 0, 0, tea.MouseActionRelease, tea.MouseButtonLeft)
 	wide := columnWidths(m.table.Columns())
 	for cycle := 0; cycle < 4; cycle++ {
-		for _, width := range []int{180, 140, 120, 110, 100, 63, 62, 61, 240} {
+		for _, width := range []int{180, 140, 120, 110, 100, 71, 70, 69, 240} {
 			m = sendWindowSize(m, width, 40)
 			if !m.preferences.Manual() {
 				t.Fatal("resize lost manual preferences")
 			}
-			if got := tableWidth(m.table.Columns()); got != max(width, 62) {
+			if got := tableWidth(m.table.Columns()); got != max(width, minimumTableWidth()) {
 				t.Fatalf("cycle %d, viewport %d: padded width = %d", cycle, width, got)
 			}
 			for i, col := range m.table.Columns() {
@@ -409,10 +409,10 @@ func TestWindowSizeOnlyCancelsDragForAChangedWidth(t *testing.T) {
 func TestTooNarrowNoticeMatchesHeaderOriginAndRecovers(t *testing.T) {
 	m := New(999, false)
 	m.applyWorktrees([]worktree.Entry{wtEntry("/w/a", "a", 0)})
-	for _, width := range []int{61, 62, 63, 180, 61} {
+	for _, width := range []int{69, 70, 71, 180, 69} {
 		m = sendWindowSize(m, width, 40)
 		header, y := m.renderHeader()
-		if got, want := strings.Contains(ansi.Strip(header), "terminal too narrow"), width < 62; got != want {
+		if got, want := strings.Contains(ansi.Strip(header), "terminal too narrow"), width < minimumTableWidth(); got != want {
 			t.Fatalf("viewport %d: warning = %v, want %v", width, got, want)
 		}
 		if y != len(strings.Split(header, "\n"))+1 {
@@ -423,7 +423,7 @@ func TestTooNarrowNoticeMatchesHeaderOriginAndRecovers(t *testing.T) {
 			t.Fatalf("viewport %d: origin points to %q, not table header", width, line)
 		}
 		wantHeight := 33
-		if width < 62 {
+		if width < minimumTableWidth() {
 			wantHeight--
 		}
 		if m.table.Height() != wantHeight {
@@ -434,7 +434,7 @@ func TestTooNarrowNoticeMatchesHeaderOriginAndRecovers(t *testing.T) {
 
 func TestNoOpGestureKeepsAutomaticLayout(t *testing.T) {
 	m := New(999, false)
-	m = sendWindowSize(m, 62, 40)
+	m = sendWindowSize(m, minimumTableWidth(), 40)
 	_, y := m.renderHeader()
 	off := loam.ColumnOffsets(m.table.Columns())[colRepo]
 	x := off.Start + off.Width
@@ -484,7 +484,7 @@ func TestParkedWordFitsAtTheWorktreeHardFloor(t *testing.T) {
 	w.ParkedAt = time.Now()
 	m := New(999, false)
 	m.worktrees = []worktree.Entry{w}
-	m = sendWindowSize(m, 62, 40)
+	m = sendWindowSize(m, minimumTableWidth(), 40)
 	if got := m.table.Columns()[colWorktree].Width; got != 6 {
 		t.Fatalf("Worktree width = %d, want parked floor 6", got)
 	}

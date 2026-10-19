@@ -1,6 +1,6 @@
 // Command understory is an interactive dashboard for every git worktree
 // of every repo it knows about (see internal/worktree): most recently
-// committed first, with Enter opening or focusing a VS Code window on
+// committed first, with Enter opening or focusing a Ghostty window on
 // whichever one is selected.
 //
 // understory reads the same shared `~/.cache/wt/known-repos` registry
@@ -35,7 +35,7 @@ var version = "0.1.0-dev"
 const helpText = `understory: interactive dashboard for every git worktree of every repo
 wt/coppice know about, most recently committed first.
 
-Arrow keys to move, Enter to open or focus a VS Code window on the
+Arrow keys to move, Enter to open or focus a Ghostty window on the
 selected worktree, p to park/unpark it, x to remove it (with
 confirmation), ? for every keybinding, r to refresh, q to quit.
 

@@ -1,6 +1,6 @@
 // Package tui is understory's interactive dashboard: every worktree of
 // every repo it knows about (see internal/worktree), most recently
-// committed first, with open-or-focus-a-VS-Code-window on Enter and
+// committed first, with open-or-focus-a-Ghostty-window on Enter and
 // confirmed removal (x/X/P/M, see actions.go) delegating the actual
 // work to `wt remove`/git, the same commands coppice's own `remove`
 // wraps.
@@ -9,7 +9,7 @@
 // currently working inside a given worktree): that would require the
 // same process-discovery machinery canopy already owns for its own
 // Agents view, and duplicating it here would recouple two tools that are
-// otherwise fully independent. Enter always opens or focuses a VS Code
+// otherwise fully independent. Enter always opens or focuses a Ghostty
 // window on the selected worktree's path, the same behavior `wt`'s own
 // post-start hook and coppice already give a freshly created one — via
 // github.com/luiul/dashkit/mycelium's shared open-or-focus logic, since
@@ -137,29 +137,29 @@ type repoResultMsg struct {
 // and notify.
 type pollDoneMsg struct{}
 
-// snapshotMsg delivers the poll's VS Code window snapshot, captured
+// snapshotMsg delivers the poll's ghostty window snapshot, captured
 // concurrently with the repo fan-out (see snapshotCmd). It can land
 // before OR after any repoResultMsg; both orderings are handled
 // (applySnapToPolledRepos vs applyStreamedRepo).
-type snapshotMsg struct{ snap vscodeSnapshot }
+type snapshotMsg struct{ snap ghosttySnapshot }
 
 type pollResultMsg struct {
 	// results is the poll's per-repo outcome (see worktree.RepoResult):
 	// a repo that errored keeps its last-known rows (applyPollResults)
 	// instead of dropping out of the view for a poll.
 	results []worktree.RepoResult
-	// vscode maps each polled worktree's path to its VS Code window
-	// state (see vscodeStates), captured by the same poll so the column
+	// ghostty maps each polled worktree's path to its ghostty window
+	// state (see ghosttyStates), captured by the same poll so the column
 	// never renders one poll's worktrees against another poll's window
 	// listing.
-	vscode map[string]vscodeState
-	// vscodeStrict maps each polled worktree's path to the stricter
+	ghostty map[string]ghosttyState
+	// ghosttyStrict maps each polled worktree's path to the stricter
 	// "would deleting this worktree strand a window?" answer (see
-	// vscodeStates), for the remove prompts' open-window warning. Kept
-	// separate from vscode because the two answer different questions:
+	// ghosttyStates), for the remove prompts' open-window warning. Kept
+	// separate from ghostty because the two answer different questions:
 	// the column's open-or-focus semantics tolerate a false open, the
 	// destructive warning does not.
-	vscodeStrict map[string]bool
+	ghosttyStrict map[string]bool
 }
 type openResultMsg struct{ result mycelium.Result }
 type clearNotifyMsg struct{ token int }
@@ -221,20 +221,20 @@ type Model struct {
 	// notification all read this.
 	pollFailures int
 
-	// vscode is the latest known per-path VS Code window states (see
+	// ghostty is the latest known per-path ghostty window states (see
 	// pollResultMsg; applyPollResults keeps last-known states for repos
-	// a poll failed on), read by buildWorktreeRows for the VS Code
+	// a poll failed on), read by buildWorktreeRows for the Ghostty
 	// column. Nil before the first poll lands; a nil map renders every
-	// row as vscodeUnknown ("?"), the honest answer before any listing
+	// row as ghosttyUnknown ("?"), the honest answer before any listing
 	// has succeeded.
-	vscode map[string]vscodeState
-	// vscodeStrict is the latest known per-path strict window answers
-	// (see pollResultMsg, same keep-last-known merge as vscode), read by
+	ghostty map[string]ghosttyState
+	// ghosttyStrict is the latest known per-path strict window answers
+	// (see pollResultMsg, same keep-last-known merge as ghostty), read by
 	// the remove prompts' open-window warning (openWindowNote). Nil
 	// before the first poll lands; a nil map warns about nothing, the
-	// same "can't tell, stay silent" rule the column's vscodeUnknown
+	// same "can't tell, stay silent" rule the column's ghosttyUnknown
 	// follows.
-	vscodeStrict map[string]bool
+	ghosttyStrict map[string]bool
 
 	table table.Model
 
@@ -284,7 +284,7 @@ type Model struct {
 // it lands (nil until then, so early repo results keep last-known
 // window states).
 type livePoll struct {
-	snap     vscodeSnapshot
+	snap     ghosttySnapshot
 	okRepos  map[string]bool
 	polled   map[string]bool
 	failures int
@@ -337,8 +337,8 @@ func New(interval time.Duration, showMain bool) Model {
 	// view "refreshing…" until that poll lands (see summaryLine).
 	if c := loadPollCache(); c != nil {
 		m.worktrees = c.Entries
-		m.vscode = c.VSCode
-		m.vscodeStrict = c.VSCodeStrict
+		m.ghostty = c.Ghostty
+		m.ghosttyStrict = c.GhosttyStrict
 	}
 	return m
 }
@@ -457,8 +457,9 @@ func probeTickCmd() tea.Cmd {
 	return tea.Tick(probeInterval, func(time.Time) tea.Msg { return probeTickMsg{} })
 }
 
-// snapshotCmd captures the poll's VS Code window snapshot (see
-// mycelium.SnapshotVSCode): one osascript listing of the window titles,
+// snapshotCmd captures the poll's ghostty window snapshot (see
+// mycelium.SnapshotEditor): one osascript listing per ghostty of the
+// window titles,
 // with git work-tree lookups memoized across rows. It runs concurrently
 // with the poll's repo fan-out (tea.Batch) rather than sequentially
 // after it like the old barrier pollCmd did — the capture doesn't
@@ -468,7 +469,7 @@ func probeTickCmd() tea.Cmd {
 // states.
 func snapshotCmd() tea.Cmd {
 	return func() tea.Msg {
-		return snapshotMsg{snap: snapshotVSCode()}
+		return snapshotMsg{snap: snapshotGhostty()}
 	}
 }
 
@@ -489,64 +490,65 @@ func waitRepoResult(ch <-chan worktree.RepoResult) tea.Cmd {
 	}
 }
 
-// openVSCode is a package-level seam onto mycelium.OpenVSCode, swapped
+// openGhostty is a package-level seam onto mycelium.OpenGhostty, swapped
 // out in tests so app_test.go can verify the selected row's path is
-// threaded through without shelling out to the real `code` CLI;
-// mycelium's own test suite covers the window-detection logic itself
-// in depth.
-var openVSCode = mycelium.OpenVSCode
+// threaded through without shelling out to osascript; mycelium's own
+// test suite covers the window-detection logic itself in depth. The tty
+// is always "": rows are worktrees, not agent processes, so there is no
+// surface identity to prefer over the path match.
+var openGhostty = mycelium.OpenGhostty
 
-// vscodeSnapshot is the slice of mycelium.VSCodeSnapshot a poll needs,
-// kept to an interface so tests can feed vscodeStates a fake without
-// touching the real window listing (see the fakeVSCodeSnapshot in
-// worktrees_test.go).
-type vscodeSnapshot interface {
+// ghosttySnapshot is the queryable view of mycelium.SnapshotGhostty a
+// poll needs, kept to an interface so tests can feed ghosttyStates a
+// fake without touching the real window listing (see the
+// fakeGhosttySnapshot in worktrees_test.go).
+type ghosttySnapshot interface {
 	Err() error
 	IsOpen(path string) bool
 	IsOpenOnWorktree(path string) bool
 }
 
-// snapshotVSCode is a package-level seam onto mycelium.SnapshotVSCode,
-// the same pattern as openVSCode above.
-var snapshotVSCode = func() vscodeSnapshot { return mycelium.SnapshotVSCode() }
+// snapshotGhostty is a package-level seam onto mycelium.SnapshotEditor,
+// the same pattern as openGhostty above.
+var snapshotGhostty = func() ghosttySnapshot { return mycelium.SnapshotGhostty() }
 
 // probeMembership is a package-level seam onto worktree.Probe (the
 // in-process .git/worktrees membership read, issue #10), swapped in
 // tests so probeNow never touches the real disk; knownRepoPaths and
 // registryModified are the same for worktree.KnownRepoPaths and
-// worktree.RegistryMtime. Same pattern as openVSCode/snapshotVSCode.
+// worktree.RegistryMtime. Same pattern as openGhostty/snapshotGhostty.
 var (
 	probeMembership  = worktree.Probe
 	knownRepoPaths   = worktree.KnownRepoPaths
 	registryModified = worktree.RegistryMtime
 )
 
-// vscodeStates maps each entry's path to its VS Code window state for
-// this poll. A failed registry read (snapshot.Err, the extension not
-// installed) marks every row vscodeUnknown: the snapshot can't tell
+// ghosttyStates maps each entry's path to its ghostty window state for
+// this poll. A failed listing (snapshot.Err, an ungranted Automation
+// permission most likely) marks every row ghosttyUnknown: the snapshot can't tell
 // open from closed, so the column renders "?" rather than a wrong "-".
 // Everything else defers to the snapshot's own match, which is Enter's
-// open-or-focus one (see mycelium.SnapshotVSCode): a row reads "open"
+// open-or-focus one (see mycelium.SnapshotEditor): a row reads "open"
 // exactly when Enter would focus an existing window.
-func vscodeStates(entries []worktree.Entry, snapshot vscodeSnapshot) map[string]vscodeState {
-	states := make(map[string]vscodeState, len(entries))
+func ghosttyStates(entries []worktree.Entry, snapshot ghosttySnapshot) map[string]ghosttyState {
+	states := make(map[string]ghosttyState, len(entries))
 	if snapshot.Err() != nil {
 		for _, e := range entries {
-			states[e.Path] = vscodeUnknown
+			states[e.Path] = ghosttyUnknown
 		}
 		return states
 	}
 	for _, e := range entries {
 		if snapshot.IsOpen(e.Path) {
-			states[e.Path] = vscodeOpen
+			states[e.Path] = ghosttyOpen
 		} else {
-			states[e.Path] = vscodeClosed
+			states[e.Path] = ghosttyClosed
 		}
 	}
 	return states
 }
 
-// vscodeStrictStates maps each entry's path to the strict "would deleting
+// ghosttyStrictStates maps each entry's path to the strict "would deleting
 // this worktree strand a window?" answer (mycelium's IsOpenOnWorktree),
 // for the remove prompts' open-window warning. The column above uses
 // IsOpen's open-or-focus semantics, where a false open merely renders a
@@ -555,7 +557,7 @@ func vscodeStates(entries []worktree.Entry, snapshot vscodeSnapshot) map[string]
 // its own map. A failed registry read (snapshot.Err) is "can't tell":
 // everything false, the warning stays silent rather than claiming
 // anything.
-func vscodeStrictStates(entries []worktree.Entry, snapshot vscodeSnapshot) map[string]bool {
+func ghosttyStrictStates(entries []worktree.Entry, snapshot ghosttySnapshot) map[string]bool {
 	strict := make(map[string]bool, len(entries))
 	if snapshot.Err() != nil {
 		return strict
@@ -568,7 +570,7 @@ func vscodeStrictStates(entries []worktree.Entry, snapshot vscodeSnapshot) map[s
 
 func openCmd(path string) tea.Cmd {
 	return func() tea.Msg {
-		return openResultMsg{result: openVSCode(path)}
+		return openResultMsg{result: openGhostty("", path)}
 	}
 }
 
@@ -620,7 +622,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		wasDragging := m.resizer.Dragging()
 		widths, changed := m.resizer.Handle(msg, cols, columnMinWidths(), 0, originY)
 		if changed {
-			policies := worktreeColumnPolicies(m.visibleWorktrees(), m.home, time.Now(), m.vscode)
+			policies := worktreeColumnPolicies(m.visibleWorktrees(), m.home, time.Now(), m.ghostty)
 			m.preferences.Capture(widths, policies, m.resizer.DragColumn())
 			m.table.SetColumns(trellis.Apply(cols, widths))
 			// Path cells are pre-truncated to the column's width (see
@@ -940,11 +942,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// enterCmd opens or focuses a VS Code window on the selected row's path.
+// enterCmd opens or focuses a Ghostty window on the selected row's path.
 // mycelium matches windows by exact folder path against the window
 // registry (every worktree of a repo shares the repo's leaf folder name,
 // but never its path), so same-named worktrees are distinguishable
-// outright — see mycelium.OpenVSCode's own doc.
+// outright — see mycelium.OpenEditor's own doc.
 func (m Model) enterCmd() tea.Cmd {
 	w, ok := m.selectedWorktree()
 	if !ok {
@@ -978,7 +980,7 @@ func clampCursor(idx, n int) int {
 // waiting for the next poll.
 func (m *Model) refreshCursorMarker() {
 	m.cursor = clampCursor(m.table.Cursor(), len(m.displayedWorktrees()))
-	m.table.SetRows(buildWorktreeRows(m.displayedWorktrees(), m.cursor, m.home, m.pathWidth(), time.Now(), m.vscode, m.filterQuery, m.placeholder()))
+	m.table.SetRows(buildWorktreeRows(m.displayedWorktrees(), m.cursor, m.home, m.pathWidth(), time.Now(), m.ghostty, m.filterQuery, m.placeholder()))
 }
 
 // settleDrag prevents a modal from swallowing the release and freezing polls.
@@ -995,7 +997,7 @@ func (m *Model) allocateColumns() {
 	if m.resizer.Dragging() {
 		return
 	}
-	policies := worktreeColumnPolicies(m.visibleWorktrees(), m.home, time.Now(), m.vscode)
+	policies := worktreeColumnPolicies(m.visibleWorktrees(), m.home, time.Now(), m.ghostty)
 	cols, fits := worktreeColumns(m.width, policies, m.preferences)
 	rows := m.table.Rows()
 	// Both setters render immediately. Remove rows before changing columns.
@@ -1010,7 +1012,7 @@ func (m *Model) resize() {
 	cursor := clampCursor(m.table.Cursor(), len(m.displayedWorktrees()))
 	m.cursor = cursor
 	m.allocateColumns()
-	m.table.SetRows(buildWorktreeRows(m.displayedWorktrees(), cursor, m.home, m.pathWidth(), time.Now(), m.vscode, m.filterQuery, m.placeholder()))
+	m.table.SetRows(buildWorktreeRows(m.displayedWorktrees(), cursor, m.home, m.pathWidth(), time.Now(), m.ghostty, m.filterQuery, m.placeholder()))
 	m.table.SetCursor(cursor)
 }
 
@@ -1032,7 +1034,7 @@ func (m Model) renderHeader() (text string, tableOriginY int) {
 		lines++
 	}
 	if m.width > 0 && !m.layoutFits {
-		text += "\n" + errorStyle.Render("terminal too narrow: widen to at least 62 columns")
+		text += "\n" + errorStyle.Render(fmt.Sprintf("terminal too narrow: widen to at least %d columns", minimumTableWidth()))
 		lines++
 	}
 	return text, lines + 1 // +1 for the blank separator line View puts before the table
@@ -1050,7 +1052,7 @@ var helpBindings = []loam.HelpBinding{
 	{Key: "pgup/pgdn, b/f", Desc: "page up/down"},
 	{Key: "u/d", Desc: "half page up/down"},
 	{Key: "g/G, home/end", Desc: "jump to the top/bottom"},
-	{Key: "enter", Desc: "open or focus a VS Code window on the worktree"},
+	{Key: "enter", Desc: "open or focus a Ghostty window on the worktree"},
 	{Key: "x", Desc: "remove the selected worktree (asks first; a merged branch is deleted, others kept)"},
 	{Key: "X", Desc: "force remove: discard uncommitted changes, delete the branch even if unmerged"},
 	{Key: "P", Desc: "prune every stale worktree registration (asks first)"},

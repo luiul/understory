@@ -59,7 +59,7 @@ type confirmState struct {
 
 // removeWorktree is a package-level seam onto worktree.Remove, swapped
 // out in tests so app/actions tests can verify dispatch without shelling
-// out to `wt`/`git`; same pattern as app.go's openVSCode seam.
+// out to `wt`/`git`; same pattern as app.go's openGhostty seam.
 var removeWorktree = worktree.Remove
 
 // parkWorktree/unparkWorktree are the same kind of seam onto
@@ -248,10 +248,10 @@ func (m Model) confirmPrompt() string {
 	return ""
 }
 
-// openWindowNote returns the removal prompts' caution about VS Code
+// openWindowNote returns the removal prompts' caution about ghostty
 // windows currently open on the targets, or "" when the last poll
 // reported none. It reads the poll's STRICT window states (see
-// vscodeStrictStates), not the column's open-or-focus ones: the column
+// ghosttyStrictStates), not the column's open-or-focus ones: the column
 // tolerates a false open (it just renders a dot), while a false open
 // here would cry wolf on a destructive prompt. The honesty rule is the
 // same either way: a failed registry read yields no strict data, the
@@ -263,7 +263,7 @@ func (m Model) confirmPrompt() string {
 func (m Model) openWindowNote(entries []worktree.Entry) string {
 	n := 0
 	for _, e := range entries {
-		if m.vscodeStrict[e.Path] {
+		if m.ghosttyStrict[e.Path] {
 			n++
 		}
 	}
@@ -271,12 +271,12 @@ func (m Model) openWindowNote(entries []worktree.Entry) string {
 		return ""
 	}
 	if len(entries) == 1 {
-		return " Warning: a VS Code window has this worktree open; close it first, or it ends up stranded on a deleted folder."
+		return " Warning: a Ghostty window has this worktree open; close it first, or it ends up stranded on a deleted folder."
 	}
 	if n == 1 {
-		return " Warning: 1 of them has a VS Code window open; close it first, or it ends up stranded on a deleted folder."
+		return " Warning: 1 of them has a Ghostty window open; close it first, or it ends up stranded on a deleted folder."
 	}
-	return fmt.Sprintf(" Warning: %d of them have a VS Code window open; close those first, or they end up stranded on deleted folders.", n)
+	return fmt.Sprintf(" Warning: %d of them have a Ghostty window open; close those first, or they end up stranded on deleted folders.", n)
 }
 
 func (m Model) singleRemovePrompt(e worktree.Entry, force bool) string {

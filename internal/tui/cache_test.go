@@ -44,10 +44,10 @@ func TestPollCacheRoundTrip(t *testing.T) {
 		{Repo: "understory", Owner: "luiul", Branch: "main", Path: "/w/main", RepoPath: "/repo", IsMain: true, CommitTime: time.Unix(1700000000, 0)},
 		{Repo: "canopy", Owner: "luiul", Branch: "feat-x", Path: "/w/feat-x", RepoPath: "/repo2", Dirty: true, MergeStatus: worktree.MergeStatusUnmerged},
 	}
-	vscode := map[string]vscodeState{"/w/main": vscodeOpen, "/w/feat-x": vscodeClosed}
+	ghostty := map[string]ghosttyState{"/w/main": ghosttyOpen, "/w/feat-x": ghosttyClosed}
 	strict := map[string]bool{"/w/main": true}
 
-	savePollCache(entries, vscode, strict)
+	savePollCache(entries, ghostty, strict)
 
 	c := loadPollCache()
 	if c == nil {
@@ -59,11 +59,11 @@ func TestPollCacheRoundTrip(t *testing.T) {
 	if len(c.Entries) != 2 || c.Entries[0].Branch != "main" || c.Entries[1].MergeStatus != worktree.MergeStatusUnmerged {
 		t.Fatalf("got entries %+v, want the saved two", c.Entries)
 	}
-	if c.VSCode["/w/main"] != vscodeOpen || c.VSCode["/w/feat-x"] != vscodeClosed {
-		t.Fatalf("got vscode %+v, want the saved states", c.VSCode)
+	if c.Ghostty["/w/main"] != ghosttyOpen || c.Ghostty["/w/feat-x"] != ghosttyClosed {
+		t.Fatalf("got ghostty %+v, want the saved states", c.Ghostty)
 	}
-	if !c.VSCodeStrict["/w/main"] {
-		t.Fatalf("got strict %+v, want /w/main true", c.VSCodeStrict)
+	if !c.GhosttyStrict["/w/main"] {
+		t.Fatalf("got strict %+v, want /w/main true", c.GhosttyStrict)
 	}
 	if c.SavedAt.IsZero() {
 		t.Fatal("want SavedAt stamped")
@@ -101,7 +101,7 @@ func TestNewSeedsTheModelFromTheCache(t *testing.T) {
 	useTempCache(t)
 	savePollCache(
 		[]worktree.Entry{{Repo: "understory", Branch: "feat-y", Path: "/w/feat-y", RepoPath: "/repo"}},
-		map[string]vscodeState{"/w/feat-y": vscodeOpen},
+		map[string]ghosttyState{"/w/feat-y": ghosttyOpen},
 		map[string]bool{"/w/feat-y": true},
 	)
 
@@ -110,8 +110,8 @@ func TestNewSeedsTheModelFromTheCache(t *testing.T) {
 	if len(m.worktrees) != 1 || m.worktrees[0].Branch != "feat-y" {
 		t.Fatalf("got worktrees %+v, want the cached row", m.worktrees)
 	}
-	if m.vscode["/w/feat-y"] != vscodeOpen || !m.vscodeStrict["/w/feat-y"] {
-		t.Fatalf("got vscode maps %+v / %+v, want the cached states", m.vscode, m.vscodeStrict)
+	if m.ghostty["/w/feat-y"] != ghosttyOpen || !m.ghosttyStrict["/w/feat-y"] {
+		t.Fatalf("got ghostty maps %+v / %+v, want the cached states", m.ghostty, m.ghosttyStrict)
 	}
 	// The cache is last session's data: until the first poll lands the
 	// summary line must say it's refreshing, not present the rows as
@@ -127,8 +127,8 @@ func TestNewSeedsTheModelFromTheCache(t *testing.T) {
 func TestNewWithoutACacheStartsCold(t *testing.T) {
 	useTempCache(t) // nothing saved
 	m := New(999, false)
-	if len(m.worktrees) != 0 || m.vscode != nil || m.vscodeStrict != nil {
-		t.Fatalf("got worktrees=%+v vscode=%+v strict=%+v, want an empty cold model", m.worktrees, m.vscode, m.vscodeStrict)
+	if len(m.worktrees) != 0 || m.ghostty != nil || m.ghosttyStrict != nil {
+		t.Fatalf("got worktrees=%+v ghostty=%+v strict=%+v, want an empty cold model", m.worktrees, m.ghostty, m.ghosttyStrict)
 	}
 }
 

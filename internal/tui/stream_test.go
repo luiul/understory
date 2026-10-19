@@ -136,7 +136,7 @@ func TestPollDoneNotifiesOnlyOnTheZeroToNFailureTransition(t *testing.T) {
 func TestSnapshotArrivingFirstAppliesToReposAsTheyLand(t *testing.T) {
 	m := New(999, false)
 	a := repoEntry("/repo/a", "/w/a", "a")
-	snap := fakeVSCodeSnapshot{open: map[string]bool{"/w/a": true}}
+	snap := fakeGhosttySnapshot{open: map[string]bool{"/w/a": true}}
 
 	// The snapshotMsg beats even pollStartedMsg (the two are batched
 	// concurrently): it must be kept, not dropped.
@@ -147,31 +147,31 @@ func TestSnapshotArrivingFirstAppliesToReposAsTheyLand(t *testing.T) {
 	updated, _ = mm.Update(repoResultMsg{result: okResult("/repo/a", a)})
 	mm = updated.(Model)
 
-	if mm.vscode["/w/a"] != vscodeOpen {
-		t.Fatalf("got vscode %v, want open for /w/a", mm.vscode["/w/a"])
+	if mm.ghostty["/w/a"] != ghosttyOpen {
+		t.Fatalf("got ghostty %v, want open for /w/a", mm.ghostty["/w/a"])
 	}
-	if !mm.vscodeStrict["/w/a"] {
-		t.Fatalf("got strict %v, want true for /w/a", mm.vscodeStrict["/w/a"])
+	if !mm.ghosttyStrict["/w/a"] {
+		t.Fatalf("got strict %v, want true for /w/a", mm.ghosttyStrict["/w/a"])
 	}
 }
 
 func TestSnapshotArrivingLateCatchesUpReposThatLandedFirst(t *testing.T) {
 	m := New(999, false)
 	a := repoEntry("/repo/a", "/w/a", "a")
-	snap := fakeVSCodeSnapshot{open: map[string]bool{"/w/a": true}}
+	snap := fakeGhosttySnapshot{open: map[string]bool{"/w/a": true}}
 
 	updated, _ := m.Update(pollStartedMsg{results: nil})
 	mm := updated.(Model)
 	updated, _ = mm.Update(repoResultMsg{result: okResult("/repo/a", a)})
 	mm = updated.(Model)
-	if mm.vscode["/w/a"] != vscodeUnknown {
-		t.Fatalf("got %v before the snapshot, want unknown", mm.vscode["/w/a"])
+	if mm.ghostty["/w/a"] != ghosttyUnknown {
+		t.Fatalf("got %v before the snapshot, want unknown", mm.ghostty["/w/a"])
 	}
 
 	updated, _ = mm.Update(snapshotMsg{snap: snap})
 	mm = updated.(Model)
-	if mm.vscode["/w/a"] != vscodeOpen {
-		t.Fatalf("got %v after the late snapshot, want open", mm.vscode["/w/a"])
+	if mm.ghostty["/w/a"] != ghosttyOpen {
+		t.Fatalf("got %v after the late snapshot, want open", mm.ghostty["/w/a"])
 	}
 }
 
@@ -179,8 +179,8 @@ func TestLateSnapshotLeavesFailedReposLastKnownStatesAlone(t *testing.T) {
 	m := New(999, false)
 	a := repoEntry("/repo/a", "/w/a", "a")
 	m.applyWorktrees([]worktree.Entry{a})
-	m.vscode = map[string]vscodeState{"/w/a": vscodeOpen}
-	snap := fakeVSCodeSnapshot{open: map[string]bool{}} // would say closed if applied
+	m.ghostty = map[string]ghosttyState{"/w/a": ghosttyOpen}
+	snap := fakeGhosttySnapshot{open: map[string]bool{}} // would say closed if applied
 
 	updated, _ := m.Update(pollStartedMsg{results: nil})
 	mm := updated.(Model)
@@ -189,8 +189,8 @@ func TestLateSnapshotLeavesFailedReposLastKnownStatesAlone(t *testing.T) {
 	updated, _ = mm.Update(snapshotMsg{snap: snap})
 	mm = updated.(Model)
 
-	if mm.vscode["/w/a"] != vscodeOpen {
-		t.Fatalf("got %v, want the failed repo's last-known open state kept", mm.vscode["/w/a"])
+	if mm.ghostty["/w/a"] != ghosttyOpen {
+		t.Fatalf("got %v, want the failed repo's last-known open state kept", mm.ghostty["/w/a"])
 	}
 }
 
@@ -198,7 +198,7 @@ func TestASnapshotArrivingWithNoPollInFlightIsDiscarded(t *testing.T) {
 	m := New(999, false)
 	m.pollInFlight = false // idle between polls
 
-	updated, _ := m.Update(snapshotMsg{snap: fakeVSCodeSnapshot{}})
+	updated, _ := m.Update(snapshotMsg{snap: fakeGhosttySnapshot{}})
 	mm := updated.(Model)
 
 	if mm.poll != nil {

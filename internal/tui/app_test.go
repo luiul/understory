@@ -40,14 +40,14 @@ func TestEnterCmdIsNilWhenNothingIsSelected(t *testing.T) {
 }
 
 func TestEnterCmdThreadsTheSelectedRowsPathToMycelium(t *testing.T) {
-	// mycelium matches windows by exact folder path against the window
-	// registry — but only if understory actually hands the path over.
-	orig := openVSCode
-	t.Cleanup(func() { openVSCode = orig })
-	var gotPath string
-	openVSCode = func(path string) mycelium.Result {
-		gotPath = path
-		return mycelium.Result{OK: true, Message: "Focused VS Code window for " + path + "."}
+	// mycelium matches windows by title against the window listing —
+	// but only if understory actually hands the path over.
+	orig := openGhostty
+	t.Cleanup(func() { openGhostty = orig })
+	var gotTty, gotPath string
+	openGhostty = func(tty, path string) mycelium.Result {
+		gotTty, gotPath = tty, path
+		return mycelium.Result{OK: true, Message: "Focused Ghostty window for " + path + "."}
 	}
 
 	target := wtEntry("/w/tardis-community", "patch/ISA-18409", 0)
@@ -65,6 +65,9 @@ func TestEnterCmdThreadsTheSelectedRowsPathToMycelium(t *testing.T) {
 	}
 	if gotPath != "/w/tardis-community" {
 		t.Fatalf("got %q, want %q", gotPath, "/w/tardis-community")
+	}
+	if gotTty != "" {
+		t.Fatalf("got tty %q, want empty: worktree rows carry no tty", gotTty)
 	}
 }
 
@@ -252,7 +255,7 @@ func TestMouseDragOnlyResizesTheTwoColumnsStraddlingTheDraggedBorder(t *testing.
 	cols := m.table.Columns()
 	_, originY := m.renderHeader()
 	borderX := mergeBorderX(cols)
-	oldMergeWidth, oldVSCodeWidth := cols[colMerge].Width, cols[colVSCode].Width
+	oldMergeWidth, oldEditorWidth := cols[colMerge].Width, cols[colGhostty].Width
 	oldRepoWidth, oldCreatedWidth := cols[colRepo].Width, cols[colCreated].Width
 	oldPathWidth := cols[colPath].Width
 
@@ -265,7 +268,7 @@ func TestMouseDragOnlyResizesTheTwoColumnsStraddlingTheDraggedBorder(t *testing.
 	if got, want := gotCols[colMerge].Width, oldMergeWidth+4; got != want {
 		t.Fatalf("Merge width = %d, want %d", got, want)
 	}
-	if got, want := gotCols[colVSCode].Width, oldVSCodeWidth-4; got != want {
+	if got, want := gotCols[colGhostty].Width, oldEditorWidth-4; got != want {
 		t.Fatalf("VS Code width = %d, want %d (its own left-hand neighbor absorbs the drag)", got, want)
 	}
 	// Every column not touching the dragged border must stay put.
@@ -532,8 +535,10 @@ func TestViewMarksColumnBordersOnTheHeaderRowSoThereIsSomethingToDrag(t *testing
 	if headerLine == "" {
 		t.Fatalf("View() = %q, want a header line containing %q", m.View(), "Repo")
 	}
-	// 7 columns, so 6 internal borders.
-	if n := strings.Count(headerLine, loam.BorderGlyph); n != 6 {
+	// One internal border per column pair: however many columns the
+	// layout ends up with, the header line must carry them all.
+	nCols := len(m.table.Columns())
+	if n := strings.Count(headerLine, loam.BorderGlyph); n != nCols-1 {
 		t.Fatalf("header line has %d border glyphs, want 6 (one per internal column border): %q", n, headerLine)
 	}
 }

@@ -22,7 +22,7 @@ tools, one pair for git worktrees, one pair for agent sessions:
 |---|---|---|
 | [`wt`](https://worktrunk.dev) (worktrunk) | engine | creates/removes worktrees, runs lifecycle hooks (`post-start`, `pre-remove`, ...), maintains the shared registry |
 | [coppice](https://github.com/luiul/coppice) | lifecycle CLI | cross-repo `new`/`list`/`remove`/`clean` worktrees, on top of `wt`, from anywhere on disk |
-| **understory** (this repo) | worktree radar | live dashboard of every worktree in the registry; open-or-focus a VS Code window on Enter, remove with confirmation on `x` |
+| **understory** (this repo) | worktree radar | live dashboard of every worktree in the registry; open-or-focus a Ghostty window on Enter, remove with confirmation on `x` |
 | [canopy](https://github.com/luiul/canopy) | agent radar | live, read-only dashboard of every agent CLI session on the machine; jump-to-window on Enter |
 
 ```mermaid
@@ -58,9 +58,9 @@ for the one piece of that old view intentionally not carried over.
 understory — worktrees on this machine
 2 worktrees
 
-Repo                  Branch          Created   Worktree  Merge      VS Code  Path
-luiul/understory      hide-main-wt    12s       dirty     unmerged   open     ~/worktrees/.../understory
-hellofresh/isa-orch…  fix-writeback   3d        clean     unmerged   -        ~/worktrees/.../isa-orchestration
+Repo                  Branch          Created   Modified   Worktree  Merge     Ghostty  Path
+luiul/understory      hide-main-wt    12s       12s        dirty     unmerged   open     ~/worktrees/.../understory
+hellofresh/isa-orch…  fix-writeback   3d        8h         clean     unmerged   -        ~/worktrees/.../isa-orchestration
 
 ↑/↓ move · enter open/focus · x remove · / filter · ? help · q quit
 ```
@@ -85,7 +85,7 @@ the side. Path shortens a leading home-directory prefix to `~`, same as
 your shell prompt, and when the column is too narrow it truncates the
 *head* (`…speed-up-ci/global-ops`), because the tail is what identifies
 the worktree — the head is the same `~/worktrees/…` prefix on nearly
-every row. Columns use the full terminal width. Repo, Branch, and Path first receive space for their displayed text. Repo and Branch have higher content priority than Path. Once that text fits, these columns share spare space with weights of 1:2:2. Created, Worktree, Merge, and VS Code stay compact. On narrow terminals, text columns shrink before compact fields. Every column keeps a hard minimum. Below 62 terminal columns, a clear warning asks you to widen the window. No columns disappear. Text filtering does not change column widths.
+every row. Columns use the full terminal width. Repo, Branch, and Path first receive space for their displayed text. Repo and Branch have higher content priority than Path. Once that text fits, these columns share spare space with weights of 1:2:2. Created, Modified, Worktree, Merge, and Ghostty stay compact. On narrow terminals, text columns shrink before compact fields. Every column keeps a hard minimum. Below 70 terminal columns, a clear warning asks you to widen the window. No columns disappear. Text filtering does not change column widths.
 
 Branch appends ` @ <segment>/`
 when `wt` reports the worktree as a branch_worktree_mismatch: the
@@ -94,7 +94,12 @@ and later `git switch`ed by hand, so the row is keyed by its checked-out
 branch while the path names a different one, and without the flag that
 branch would look like it has no worktree at all. The suffix renders
 with a dim `@` and a magenta segment, the same colors coppice gives it,
-so it reads as context next to the plain branch name. Worktree/Merge are
+so it reads as context next to the plain branch name. Created is the
+worktree directory's own age; Modified is when someone last worked in
+it: the later of its last commit and the newest uncommitted or untracked
+file's mtime, so a worktree with fresh edits never reads as stale just
+because its HEAD is old (a clean worktree takes its commit time
+directly, so the steady-state poll stays cheap). Worktree/Merge are
 plain-word renderings of `wt`'s own compact status glyphs
 (dirty/ahead/behind), rather than the glyphs themselves. Worktree also
 shows `parked` when the branch carries coppice's parked mark
@@ -105,13 +110,13 @@ whole row greys out around the still-blue word, the same treatment
 aside at a glance while the signal itself stays legible. A
 newer head commit flips the row back to active on its own, the same
 read-time rule `cop list` applies, so a stale mark never needs cleaning
-up. The VS Code
-column tells you whether a VS Code window is already open on the
+up. The Ghostty
+column tells you whether a Ghostty window is already open on the
 worktree (`open`, `-`, or `?` when the window listing couldn't be
-read, or came back empty while Code is running): it answers with the
-exact same already-open check Enter's open-or-focus runs (see below),
-so `open` means Enter would focus that window rather than open a new
-one.
+read, or came back empty while Ghostty is running): it answers with
+the exact same already-open check Enter's open-or-focus runs (see
+below), so `open` means Enter would focus that window rather than open
+a new one.
 
 Each internal column border can be dragged with the mouse. The two neighboring columns trade width, so the table's total width stays unchanged. Visible dividers on the header row show where to grab. The shared [`trellis`](https://github.com/luiul/dashkit/tree/main/trellis) and [`loam`](https://github.com/luiul/dashkit/tree/main/loam) packages handle these gestures and dividers for both understory and canopy.
 
@@ -152,7 +157,7 @@ ask for confirmation first (`y` confirms, `n`/`esc`/`enter` cancels, and
 an unanswered prompt cancels itself after 10 seconds, since rows keep
 repolling and reordering underneath it), then delegate to `wt remove`
 (`git worktree remove --force` for stale registrations), the same
-commands `cop remove` wraps. When the poll's VS Code snapshot reports a
+commands `cop remove` wraps. When the poll's editor snapshot reports a
 window currently open on a removal target, the prompt says so and asks
 you to close it first, since deleting a directory out from under an open
 window strands that window on a path that no longer exists. That check

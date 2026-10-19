@@ -33,7 +33,7 @@ const cacheVersion = 1
 
 // pollCachePath is the package-level seam onto the cache file's
 // location, swapped out in tests (which must never touch the real
-// ~/.cache); the same pattern as the openVSCode seam.
+// ~/.cache); the same pattern as the openGhostty seam.
 var pollCachePath = defaultPollCachePath
 
 // defaultPollCachePath is ~/.cache/understory/poll-cache.json: next to
@@ -51,14 +51,14 @@ func defaultPollCachePath() string {
 // pollCache is one saved merged poll view: the entries exactly as the
 // last completed poll left them (per-repo merged, last-known rows for
 // failed repos included), plus the window-state maps, so a warm start
-// renders the VS Code column's last-known states too instead of
+// renders the ghostty column's last-known states too instead of
 // flashing "?" on every row for a poll.
 type pollCache struct {
 	Version      int                    `json:"version"`
 	SavedAt      time.Time              `json:"savedAt"`
 	Entries      []worktree.Entry       `json:"entries"`
-	VSCode       map[string]vscodeState `json:"vscode"`
-	VSCodeStrict map[string]bool        `json:"vscodeStrict"`
+	Ghostty       map[string]ghosttyState `json:"ghostty"`
+	GhosttyStrict map[string]bool        `json:"ghosttyStrict"`
 }
 
 // loadPollCache reads the saved poll view, or returns nil on ANY
@@ -84,7 +84,7 @@ func loadPollCache() *pollCache {
 // cache behind (loadPollCache would survive one anyway, but the rename
 // is cheaper than the exception path). Errors are swallowed on purpose:
 // see the file doc.
-func savePollCache(entries []worktree.Entry, vscode map[string]vscodeState, strict map[string]bool) {
+func savePollCache(entries []worktree.Entry, ghostty map[string]ghosttyState, strict map[string]bool) {
 	path := pollCachePath()
 	if path == "" {
 		return
@@ -93,8 +93,8 @@ func savePollCache(entries []worktree.Entry, vscode map[string]vscodeState, stri
 		Version:      cacheVersion,
 		SavedAt:      time.Now(),
 		Entries:      entries,
-		VSCode:       vscode,
-		VSCodeStrict: strict,
+		Ghostty:       ghostty,
+		GhosttyStrict: strict,
 	})
 	if err != nil {
 		return

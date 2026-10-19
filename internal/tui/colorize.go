@@ -62,7 +62,7 @@ var (
 // once the whole row is highlighted the marker itself becomes redundant
 // (removed; see cursorSentinel in app.go for how the row is identified
 // instead now). A muted grey background band reads as "current row" the
-// way most modern list UIs (editor gutters, lazygit, k9s) already do;
+// way most modern list UIs (ghostty gutters, lazygit, k9s) already do;
 // full-invert Reverse(true) worked but read harsher and more dated, and
 // fought a bit with the Worktree/Merge foreground colors nested inside
 // it (see loam.HighlightRow) since reversing also inverts *their*

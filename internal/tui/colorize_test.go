@@ -32,6 +32,7 @@ func newColorizeTable(rows ...table.Row) table.Model {
 		{Title: "Repo", Width: 18},
 		{Title: "Branch", Width: 30},
 		{Title: "Created", Width: 8},
+		{Title: "Modified", Width: 9},
 		{Title: "Worktree", Width: 8},
 		{Title: "Merge", Width: 9},
 	}
@@ -93,8 +94,8 @@ func TestBranchSegmentsDeclinesAnythingButTheMismatchLabel(t *testing.T) {
 func TestColorizeRowsColorsTheMismatchSuffixButNotTheBranchName(t *testing.T) {
 	withForcedColor(t)
 	tbl := newColorizeTable(
-		table.Row{"luiul/understory", "feature/other @ review-jamie/", "3d", "clean", "unmerged"},
-		table.Row{"luiul/understory", "main", "12s", "dirty", "-"},
+		table.Row{"luiul/understory", "feature/other @ review-jamie/", "3d", "3d", "clean", "unmerged"},
+		table.Row{"luiul/understory", "main", "12s", "12s", "dirty", "-"},
 	)
 
 	got := colorizeRows(tbl.View(), tbl.Columns(), colWorktree, colMerge)
@@ -123,8 +124,8 @@ func TestColorizeRowsColorsTheMismatchSuffixButNotTheBranchName(t *testing.T) {
 func TestColorizeRowsHighlightsTheSelectedMismatchRowWithTheSuffixInside(t *testing.T) {
 	withForcedColor(t)
 	tbl := newColorizeTable(
-		table.Row{"luiul/understory", "main", "3d", "clean", "-"},
-		table.Row{"luiul/understory", "feature/other @ review-jamie/", cursorSentinel + "12s", "clean", "unmerged"},
+		table.Row{"luiul/understory", "main", "3d", "3d", "clean", "-"},
+		table.Row{"luiul/understory", "feature/other @ review-jamie/", cursorSentinel + "12s", "12s", "clean", "unmerged"},
 	)
 
 	got := colorizeRows(tbl.View(), tbl.Columns(), colWorktree, colMerge)
@@ -154,8 +155,8 @@ func TestColorizeRowsHighlightsTheSelectedMismatchRowWithTheSuffixInside(t *test
 func TestColorizeRowsGreysOutTheParkedRowButKeepsTheParkedWordBright(t *testing.T) {
 	withForcedColor(t)
 	tbl := newColorizeTable(
-		table.Row{"luiul/understory", "main", "3d", "clean", "-"},
-		table.Row{"luiul/understory", "feature/done", parkedMarker + "2d", "parked", "merged"},
+		table.Row{"luiul/understory", "main", "3d", "3d", "clean", "-"},
+		table.Row{"luiul/understory", "feature/done", parkedMarker + "2d", "2d", "parked", "merged"},
 	)
 
 	got := colorizeRows(tbl.View(), tbl.Columns(), colWorktree, colMerge)
@@ -186,8 +187,8 @@ func TestColorizeRowsGreysOutTheParkedRowButKeepsTheParkedWordBright(t *testing.
 func TestColorizeRowsGreysOutASelectedParkedRowWithoutBreakingTheHighlightBand(t *testing.T) {
 	withForcedColor(t)
 	tbl := newColorizeTable(
-		table.Row{"luiul/understory", "main", "3d", "clean", "-"},
-		table.Row{"luiul/understory", "feature/done", cursorSentinel + parkedMarker + "2d", "parked", "merged"},
+		table.Row{"luiul/understory", "main", "3d", "3d", "clean", "-"},
+		table.Row{"luiul/understory", "feature/done", cursorSentinel + parkedMarker + "2d", "2d", "parked", "merged"},
 	)
 
 	got := colorizeRows(tbl.View(), tbl.Columns(), colWorktree, colMerge)

@@ -151,8 +151,8 @@ func TestBuildWorktreeRowsPlaceholderWhenEmpty(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("got %d rows, want 1 placeholder row", len(rows))
 	}
-	if len(rows[0]) != 7 {
-		t.Fatalf("got %d cells, want 7 to match worktreeColumns", len(rows[0]))
+	if len(rows[0]) != 8 {
+		t.Fatalf("got %d cells, want 8 to match worktreeColumns", len(rows[0]))
 	}
 	if rows[0][colPath] != "nothing to show" {
 		t.Fatalf("got Path cell %q, want the given placeholder message", rows[0][colPath])
@@ -313,21 +313,21 @@ func TestBuildWorktreeRowsShowsTheMismatchSuffixInTheBranchCell(t *testing.T) {
 	}
 }
 
-// fakeVSCodeSnapshot implements the vscodeSnapshot seam with a canned
+// fakeGhosttySnapshot implements the ghosttySnapshot seam with a canned
 // open set (or a read error), so the column's poll-to-cell path is
 // testable without the real window listing; mycelium's own suite covers
 // the matching itself.
-type fakeVSCodeSnapshot struct {
+type fakeGhosttySnapshot struct {
 	open   map[string]bool
 	err    error
 	noCall bool // set when IsOpen/IsOpenOnWorktree must never be called (a failed listing)
 }
 
-func (f fakeVSCodeSnapshot) Err() error { return f.err }
+func (f fakeGhosttySnapshot) Err() error { return f.err }
 
-func (f fakeVSCodeSnapshot) IsOpen(path string) bool {
+func (f fakeGhosttySnapshot) IsOpen(path string) bool {
 	if f.noCall {
-		panic("IsOpen called on a failed listing; vscodeStates must not query it")
+		panic("IsOpen called on a failed listing; ghosttyStates must not query it")
 	}
 	return f.open[path]
 }
@@ -335,72 +335,72 @@ func (f fakeVSCodeSnapshot) IsOpen(path string) bool {
 // IsOpenOnWorktree reuses the canned open set: the strict-vs-column
 // matching difference is mycelium's (and covered by its own suite); here
 // only the plumbing matters.
-func (f fakeVSCodeSnapshot) IsOpenOnWorktree(path string) bool {
+func (f fakeGhosttySnapshot) IsOpenOnWorktree(path string) bool {
 	if f.noCall {
-		panic("IsOpenOnWorktree called on a failed listing; vscodeStrictStates must not query it")
+		panic("IsOpenOnWorktree called on a failed listing; ghosttyStrictStates must not query it")
 	}
 	return f.open[path]
 }
 
-func TestVSCodeStatesMapsOpenAndClosedPerPath(t *testing.T) {
+func TestEditorStatesMapsOpenAndClosedPerPath(t *testing.T) {
 	entries := []worktree.Entry{wtEntry("/w/a", "a", 0), wtEntry("/w/b", "b", 0)}
-	snapshot := fakeVSCodeSnapshot{open: map[string]bool{"/w/a": true}}
+	snapshot := fakeGhosttySnapshot{open: map[string]bool{"/w/a": true}}
 
-	states := vscodeStates(entries, snapshot)
+	states := ghosttyStates(entries, snapshot)
 
-	if states["/w/a"] != vscodeOpen || states["/w/b"] != vscodeClosed {
+	if states["/w/a"] != ghosttyOpen || states["/w/b"] != ghosttyClosed {
 		t.Fatalf("got %v, want /w/a open and /w/b closed", states)
 	}
 }
 
-func TestVSCodeStatesReportsUnknownForAFailedListing(t *testing.T) {
+func TestEditorStatesReportsUnknownForAFailedListing(t *testing.T) {
 	entries := []worktree.Entry{wtEntry("/w/a", "a", 0)}
-	snapshot := fakeVSCodeSnapshot{err: errors.New("not authorized"), noCall: true}
+	snapshot := fakeGhosttySnapshot{err: errors.New("not authorized"), noCall: true}
 
-	states := vscodeStates(entries, snapshot)
+	states := ghosttyStates(entries, snapshot)
 
-	if states["/w/a"] != vscodeUnknown {
-		t.Fatalf("got %v, want vscodeUnknown (a failed listing can't claim closed)", states["/w/a"])
+	if states["/w/a"] != ghosttyUnknown {
+		t.Fatalf("got %v, want ghosttyUnknown (a failed listing can't claim closed)", states["/w/a"])
 	}
 }
 
-func TestVSCodeStrictStatesMapsPerPath(t *testing.T) {
+func TestEditorStrictStatesMapsPerPath(t *testing.T) {
 	entries := []worktree.Entry{wtEntry("/w/a", "a", 0), wtEntry("/w/b", "b", 0)}
-	snapshot := fakeVSCodeSnapshot{open: map[string]bool{"/w/a": true}}
+	snapshot := fakeGhosttySnapshot{open: map[string]bool{"/w/a": true}}
 
-	strict := vscodeStrictStates(entries, snapshot)
+	strict := ghosttyStrictStates(entries, snapshot)
 
 	if !strict["/w/a"] || strict["/w/b"] {
 		t.Fatalf("got %v, want /w/a true and /w/b false", strict)
 	}
 }
 
-func TestVSCodeStrictStatesStaysSilentForAFailedListing(t *testing.T) {
+func TestEditorStrictStatesStaysSilentForAFailedListing(t *testing.T) {
 	entries := []worktree.Entry{wtEntry("/w/a", "a", 0)}
-	snapshot := fakeVSCodeSnapshot{err: errors.New("not authorized"), noCall: true}
+	snapshot := fakeGhosttySnapshot{err: errors.New("not authorized"), noCall: true}
 
-	strict := vscodeStrictStates(entries, snapshot)
+	strict := ghosttyStrictStates(entries, snapshot)
 
 	if strict["/w/a"] {
 		t.Fatalf("got %v, want nothing marked (a failed listing can't claim anything)", strict)
 	}
 }
 
-func TestBuildWorktreeRowsShowsTheVSCodeColumn(t *testing.T) {
+func TestBuildWorktreeRowsShowsTheEditorColumn(t *testing.T) {
 	entries := []worktree.Entry{wtEntry("/w/a", "a", 0), wtEntry("/w/b", "b", 0), wtEntry("/w/c", "c", 0)}
-	vscode := map[string]vscodeState{"/w/a": vscodeOpen, "/w/b": vscodeClosed}
+	ghostty := map[string]ghosttyState{"/w/a": ghosttyOpen, "/w/b": ghosttyClosed}
 
-	rows := buildWorktreeRows(entries, 0, "", 0, time.Now(), vscode, "", "")
+	rows := buildWorktreeRows(entries, 0, "", 0, time.Now(), ghostty, "", "")
 
-	if got := rows[0][colVSCode]; got != "open" {
+	if got := rows[0][colGhostty]; got != "open" {
 		t.Fatalf("got %q, want %q", got, "open")
 	}
-	if got := rows[1][colVSCode]; got != "-" {
+	if got := rows[1][colGhostty]; got != "-" {
 		t.Fatalf("got %q, want %q (checked, nothing open)", got, "-")
 	}
 	// /w/c is missing from the map: a worktree with no answer renders
 	// the zero-value unknown, never a bare "-".
-	if got := rows[2][colVSCode]; got != "?" {
+	if got := rows[2][colGhostty]; got != "?" {
 		t.Fatalf("got %q, want %q (no answer for this path)", got, "?")
 	}
 }
@@ -742,18 +742,18 @@ func TestApplyPollResultsKeepsAFailedReposWindowStates(t *testing.T) {
 	b := repoEntry("/repo/b", "/w/b", "b")
 	m.applyPollResults(pollResultMsg{
 		results:      []worktree.RepoResult{okResult("/repo/b", b)},
-		vscode:       map[string]vscodeState{"/w/b": vscodeOpen},
-		vscodeStrict: map[string]bool{"/w/b": true},
+		ghostty:       map[string]ghosttyState{"/w/b": ghosttyOpen},
+		ghosttyStrict: map[string]bool{"/w/b": true},
 	})
 
 	m.applyPollResults(pollResultMsg{
 		results:      []worktree.RepoResult{{RepoPath: "/repo/b", Err: errors.New("timed out")}},
-		vscode:       map[string]vscodeState{},
-		vscodeStrict: map[string]bool{},
+		ghostty:       map[string]ghosttyState{},
+		ghosttyStrict: map[string]bool{},
 	})
 
-	if m.vscode["/w/b"] != vscodeOpen || !m.vscodeStrict["/w/b"] {
-		t.Fatalf("got vscode=%v strict=%v, want the last-known states kept", m.vscode, m.vscodeStrict)
+	if m.ghostty["/w/b"] != ghosttyOpen || !m.ghosttyStrict["/w/b"] {
+		t.Fatalf("got ghostty=%v strict=%v, want the last-known states kept", m.ghostty, m.ghosttyStrict)
 	}
 }
 
@@ -833,5 +833,40 @@ func TestBuildWorktreeRowsTruncatesPathToTheGivenWidth(t *testing.T) {
 	got := rows[0][colPath]
 	if !strings.HasPrefix(got, "…") || !strings.HasSuffix(got, "global-ops") || runewidth.StringWidth(got) != 20 {
 		t.Fatalf("path cell = %q, want a 20-cell tail-keeping truncation", got)
+	}
+}
+
+func TestBuildWorktreeRowsModifiedColumnTracksModifiedTime(t *testing.T) {
+	// The Modified column must track Entry.ModifiedTime specifically, not
+	// fall back to reading CommitTime (the same discipline the Created
+	// column's own test pins): a long-lived worktree with fresh uncommitted
+	// edits has an old commit and a fresh ModifiedTime, and reading the
+	// wrong one would show it as stale exactly when it's most active.
+	w := wtEntry("/w/a", "a", 0)
+	w.ModifiedTime = time.Now().Add(-2 * 24 * time.Hour)
+
+	rows := buildWorktreeRows([]worktree.Entry{w}, -1, "", 0, time.Now(), nil, "", "")
+
+	if got := rows[0][colModified]; got != "2d" {
+		t.Fatalf("got %q, want \"2d\" (from ModifiedTime, not CommitTime's ~0s)", got)
+	}
+}
+
+func TestModifiedCellShowsAPlaceholderForTheUnknownCases(t *testing.T) {
+	// "…" for a Skeleton (not polled yet, the same placeholder
+	// worktreeStatusLabel uses), "-" for a Stale row or a ModifiedTime that
+	// never resolved.
+	skeleton := wtEntry("/w/skeleton", "skeleton", 0)
+	skeleton.Skeleton = true
+	if got := modifiedCell(skeleton, time.Now()); got != "…" {
+		t.Fatalf("got %q, want \"…\" for a skeleton entry", got)
+	}
+	stale := wtEntry("/w/stale", "stale", 0)
+	stale.Stale = true
+	if got := modifiedCell(stale, time.Now()); got != "-" {
+		t.Fatalf("got %q, want \"-\" for a stale entry", got)
+	}
+	if got := modifiedCell(wtEntry("/w/a", "a", 0), time.Now()); got != "-" {
+		t.Fatalf("got %q, want \"-\" for an unresolved ModifiedTime", got)
 	}
 }

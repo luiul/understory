@@ -11,7 +11,7 @@ import (
 )
 
 // copyText is a package-level seam onto pbcopy, swapped out in tests;
-// same pattern as app.go's openVSCode seam.
+// same pattern as app.go's openGhostty seam.
 var copyText = func(text string) error {
 	cmd := exec.Command("pbcopy")
 	cmd.Stdin = strings.NewReader(text)

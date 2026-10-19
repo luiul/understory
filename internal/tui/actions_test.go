@@ -17,7 +17,7 @@ func key(s string) tea.KeyMsg {
 }
 
 // stubRemove swaps the removeWorktree seam for a recording fake, same
-// pattern as the openVSCode seam tests in app_test.go.
+// pattern as the openGhostty seam tests in app_test.go.
 func stubRemove(t *testing.T) (got *[]worktree.Entry, opts *[]worktree.RemoveOptions) {
 	t.Helper()
 	orig := removeWorktree
@@ -436,15 +436,15 @@ func TestRemoveMergedTargetsOnlyTheSelectedReposMergedEntries(t *testing.T) {
 	}
 }
 
-func TestRemovePromptWarnsWhenAVSCodeWindowHasTheWorktreeOpen(t *testing.T) {
+func TestRemovePromptWarnsWhenAnEditorWindowHasTheWorktreeOpen(t *testing.T) {
 	e := wtEntry("/w/a", "a", 0)
 	m := New(999, false)
 	m.applyWorktrees([]worktree.Entry{e})
-	m.vscodeStrict = map[string]bool{"/w/a": true}
+	m.ghosttyStrict = map[string]bool{"/w/a": true}
 
 	updated, _ := m.Update(key("x"))
 	m = updated.(Model)
-	if prompt := m.confirmPrompt(); !strings.Contains(prompt, "a VS Code window has this worktree open") {
+	if prompt := m.confirmPrompt(); !strings.Contains(prompt, "a Ghostty window has this worktree open") {
 		t.Fatalf("prompt = %q, want the open-window warning", prompt)
 	}
 }
@@ -453,12 +453,12 @@ func TestForceRemovePromptKeepsTheOpenWindowWarning(t *testing.T) {
 	e := wtEntry("/w/a", "a", 0)
 	m := New(999, false)
 	m.applyWorktrees([]worktree.Entry{e})
-	m.vscodeStrict = map[string]bool{"/w/a": true}
+	m.ghosttyStrict = map[string]bool{"/w/a": true}
 
 	updated, _ := m.Update(key("X"))
 	m = updated.(Model)
 	prompt := m.confirmPrompt()
-	if !strings.Contains(prompt, "Force remove") || !strings.Contains(prompt, "a VS Code window has this worktree open") {
+	if !strings.Contains(prompt, "Force remove") || !strings.Contains(prompt, "a Ghostty window has this worktree open") {
 		t.Fatalf("prompt = %q, want the force wording plus the open-window warning", prompt)
 	}
 }
@@ -468,11 +468,11 @@ func TestStalePromptSkipsTheOpenWindowWarning(t *testing.T) {
 	stale.Stale = true
 	m := New(999, false)
 	m.applyWorktrees([]worktree.Entry{stale})
-	m.vscodeStrict = map[string]bool{"/w/gone": true}
+	m.ghosttyStrict = map[string]bool{"/w/gone": true}
 
 	updated, _ := m.Update(key("x"))
 	m = updated.(Model)
-	if prompt := m.confirmPrompt(); strings.Contains(prompt, "VS Code window") {
+	if prompt := m.confirmPrompt(); strings.Contains(prompt, "ghostty window") {
 		t.Fatalf("prompt = %q, want no window warning when the directory is already gone", prompt)
 	}
 }
@@ -481,12 +481,12 @@ func TestRemovePromptStaysSilentWhenTheWindowListingIsUnknown(t *testing.T) {
 	e := wtEntry("/w/a", "a", 0)
 	m := New(999, false)
 	m.applyWorktrees([]worktree.Entry{e})
-	// What a failed poll's vscodeStrictStates writes: nothing marked.
-	m.vscodeStrict = map[string]bool{"/w/a": false}
+	// What a failed poll's ghosttyStrictStates writes: nothing marked.
+	m.ghosttyStrict = map[string]bool{"/w/a": false}
 
 	updated, _ := m.Update(key("x"))
 	m = updated.(Model)
-	if prompt := m.confirmPrompt(); strings.Contains(prompt, "VS Code window") {
+	if prompt := m.confirmPrompt(); strings.Contains(prompt, "ghostty window") {
 		t.Fatalf("prompt = %q, want no warning when the listing can't tell", prompt)
 	}
 }
@@ -498,13 +498,13 @@ func TestRemoveMergedPromptCountsTheOpenWindows(t *testing.T) {
 	merged2.MergeStatus = worktree.MergeStatusMerged
 	m := New(999, false)
 	m.applyWorktrees([]worktree.Entry{merged1, merged2})
-	m.vscodeStrict = map[string]bool{"/w/a": true, "/w/b": false}
+	m.ghosttyStrict = map[string]bool{"/w/a": true, "/w/b": false}
 	m.table.SetCursor(0)
 
 	updated, _ := m.Update(key("M"))
 	m = updated.(Model)
 	prompt := m.confirmPrompt()
-	if !strings.Contains(prompt, "Remove 2 merged worktrees") || !strings.Contains(prompt, "1 of them has a VS Code window open") {
+	if !strings.Contains(prompt, "Remove 2 merged worktrees") || !strings.Contains(prompt, "1 of them has a Ghostty window open") {
 		t.Fatalf("prompt = %q, want the batch wording plus the open-window count", prompt)
 	}
 }

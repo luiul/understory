@@ -22,9 +22,10 @@ const (
 	repoColWidth     = 16
 	branchColWidth   = 20
 	createdColWidth  = 8
+	modifiedColWidth = 9
 	worktreeColWidth = 9
 	mergeColWidth    = 9
-	vscodeColWidth   = 8
+	ghosttyColWidth   = 8
 	minPathWidth     = 20
 	hardMinColWidth  = 8
 )
@@ -33,15 +34,16 @@ const (
 // Worktree needs six cells for "parked", not just five for "clean".
 const (
 	createdContentWidth  = 6
+	modifiedContentWidth = 6
 	worktreeContentWidth = 6
 	mergeContentWidth    = 8
-	vscodeContentWidth   = 4
+	ghosttyContentWidth   = 4
 )
 
 // Column indexes into both worktreeColumns' return value and each
 // buildWorktreeRows row, in display order. colorizeRows (see colorize.go)
 // uses colWorktree/colMerge to recolor those two columns post-render and
-// colBranch for the mismatch suffix's segment coloring; the VS Code
+// colBranch for the mismatch suffix's segment coloring; the ghostty
 // column renders in the default plain style, like Created/Path. There's no dedicated cursor column: see loam.Sentinel's
 // doc (loam pkg) for how the selected row is identified instead now that
 // the whole row is highlighted (colorize.go) rather than a leading
@@ -50,9 +52,10 @@ const (
 	colRepo = iota
 	colBranch
 	colCreated
+	colModified
 	colWorktree
 	colMerge
-	colVSCode
+	colGhostty
 	colPath
 )
 
@@ -106,22 +109,24 @@ func branchColumnWidth(worktrees []worktree.Entry) int {
 // worktreeColumnPolicies measures plain labels before filtering and group blanking.
 // Repo and Branch receive content space before Path. Compact fields fit their
 // readable defaults or current real values, without row tags or placeholders.
-func worktreeColumnPolicies(worktrees []worktree.Entry, home string, now time.Time, vscode map[string]vscodeState) []trellis.ColumnPolicy {
+func worktreeColumnPolicies(worktrees []worktree.Entry, home string, now time.Time, ghostty map[string]ghosttyState) []trellis.ColumnPolicy {
 	policies := []trellis.ColumnPolicy{
 		{Minimum: repoColWidth, HardMinimum: hardMinColWidth, Preferred: repoColumnWidth(worktrees), Weight: 1, ShrinkPriority: 1},
 		{Minimum: branchColWidth, HardMinimum: hardMinColWidth, Preferred: branchColumnWidth(worktrees), Weight: 2, ShrinkPriority: 1},
 		{Minimum: createdColWidth, HardMinimum: createdContentWidth, Preferred: createdColWidth},
+		{Minimum: modifiedColWidth, HardMinimum: modifiedContentWidth, Preferred: modifiedColWidth},
 		{Minimum: worktreeColWidth, HardMinimum: worktreeContentWidth, Preferred: worktreeColWidth},
 		{Minimum: mergeColWidth, HardMinimum: mergeContentWidth, Preferred: mergeColWidth},
-		{Minimum: vscodeColWidth, HardMinimum: vscodeContentWidth, Preferred: vscodeColWidth},
+		{Minimum: ghosttyColWidth, HardMinimum: ghosttyContentWidth, Preferred: ghosttyColWidth},
 		{Minimum: minPathWidth, HardMinimum: hardMinColWidth, Preferred: minPathWidth, Weight: 2, ShrinkPriority: 2},
 	}
 	for _, w := range worktrees {
 		labels := []string{
 			humanizeSince(now.Sub(w.CreatedTime)),
+			modifiedCell(w, now),
 			worktreeStatusLabel(w),
 			mergeStatusLabel(w),
-			vscodeCell(vscode[w.Path]),
+			ghosttyCell(ghostty[w.Path]),
 			shortenHome(w.Path, home),
 		}
 		for i, label := range labels {
@@ -139,9 +144,10 @@ func worktreeColumns(width int, policies []trellis.ColumnPolicy, preferences tre
 		{Title: "Repo"},
 		{Title: "Branch"},
 		{Title: "Created"},
+		{Title: "Modified"},
 		{Title: "Worktree"},
 		{Title: "Merge"},
-		{Title: "VS Code"},
+		{Title: "Ghostty"},
 		{Title: "Path"},
 	}
 	widths, fits := preferences.Allocate(width, policies)
@@ -154,11 +160,26 @@ func columnMinWidths() []int {
 		hardMinColWidth,
 		hardMinColWidth,
 		createdContentWidth,
+		modifiedContentWidth,
 		worktreeContentWidth,
 		mergeContentWidth,
-		vscodeContentWidth,
+		ghosttyContentWidth,
 		hardMinColWidth,
 	}
+}
+
+// minimumTableWidth is the narrowest terminal the column set fits in at
+// all: every column at its hard floor, plus one loam cell of padding per
+// column. Trellis's `fits` flips exactly at this width and renderHeader's
+// too-narrow warning names it, so the warning can never disagree with the
+// layout (the threshold used to be a hand-maintained 62 that every new
+// column silently made a lie).
+func minimumTableWidth() int {
+	total := loam.CellPadding * len(columnMinWidths())
+	for _, w := range columnMinWidths() {
+		total += w
+	}
+	return total
 }
 
 // sortWorktrees orders worktrees for display: grouped so every worktree
@@ -249,7 +270,7 @@ func (m Model) displayedWorktrees() []worktree.Entry {
 	}
 	filtered := make([]worktree.Entry, 0, len(visible))
 	for _, w := range visible {
-		if sieve.Match(m.filterQuery, filterCells(w, m.home, m.vscode)...) {
+		if sieve.Match(m.filterQuery, filterCells(w, m.home, m.ghostty)...) {
 			filtered = append(filtered, w)
 		}
 	}
@@ -260,17 +281,17 @@ func (m Model) displayedWorktrees() []worktree.Entry {
 // github.com/luiul/dashkit/sieve): the row's stable text columns, which
 // are Repo, Branch (mismatch suffix included, so the path's own branch
 // segment finds the row too), the Worktree and Merge status words, the
-// VS Code state word, and the shortened Path. Created is deliberately
-// excluded: it ticks over under the user's fingers ("12s" becomes
-// "13s"), so a row would match-or-not from one poll to the next for
-// reasons invisible in the query.
-func filterCells(w worktree.Entry, home string, vscode map[string]vscodeState) []string {
+// ghostty state word, and the shortened Path. Created and Modified are
+// deliberately excluded: they tick over under the user's fingers
+// ("12s" becomes "13s"), so a row would match-or-not from one poll to
+// the next for reasons invisible in the query.
+func filterCells(w worktree.Entry, home string, ghostty map[string]ghosttyState) []string {
 	return []string{
 		repoLabel(w),
 		branchLabel(w),
 		worktreeStatusLabel(w),
 		mergeStatusLabel(w),
-		vscodeCell(vscode[w.Path]),
+		ghosttyCell(ghostty[w.Path]),
 		shortenHome(w.Path, home),
 	}
 }
@@ -333,41 +354,41 @@ func (m *Model) mergeRepoRows(r worktree.RepoResult) {
 // arrived (a repo landing BEFORE the snapshot keeps last-known states;
 // applySnapToPolledRepos catches those up when it lands), confirmation
 // revalidation, and a redisplay preserving the current selection.
-func (m *Model) applyStreamedRepo(r worktree.RepoResult, snap vscodeSnapshot) {
+func (m *Model) applyStreamedRepo(r worktree.RepoResult, snap ghosttySnapshot) {
 	previousPath := m.selectedPath()
 	m.mergeRepoRows(r)
 	if r.Err == nil && snap != nil {
-		m.applyRepoVSCode(r.Entries, snap)
+		m.applyRepoGhostty(r.Entries, snap)
 	}
 	m.revalidateConfirm(m.worktrees)
 	m.redisplay(previousPath)
 }
 
-// applyRepoVSCode sets fresh window states for one successfully polled
+// applyRepoGhostty sets fresh window states for one successfully polled
 // set of entries from the poll's snapshot, the same keep-nothing-back
-// answers vscodeStates/vscodeStrictStates compute for the batch path:
-// a failed listing marks every entry vscodeUnknown rather than a wrong
+// answers ghosttyStates/ghosttyStrictStates compute for the batch path:
+// a failed listing marks every entry ghosttyUnknown rather than a wrong
 // "-". States for paths no longer present are NOT pruned here:
 // finishPoll prunes both maps to the current row set at the end of
 // every poll.
-func (m *Model) applyRepoVSCode(entries []worktree.Entry, snap vscodeSnapshot) {
-	if m.vscode == nil {
-		m.vscode = map[string]vscodeState{}
+func (m *Model) applyRepoGhostty(entries []worktree.Entry, snap ghosttySnapshot) {
+	if m.ghostty == nil {
+		m.ghostty = map[string]ghosttyState{}
 	}
-	if m.vscodeStrict == nil {
-		m.vscodeStrict = map[string]bool{}
+	if m.ghosttyStrict == nil {
+		m.ghosttyStrict = map[string]bool{}
 	}
 	for _, e := range entries {
 		if snap.Err() != nil {
-			m.vscode[e.Path] = vscodeUnknown
+			m.ghostty[e.Path] = ghosttyUnknown
 			continue
 		}
 		if snap.IsOpen(e.Path) {
-			m.vscode[e.Path] = vscodeOpen
+			m.ghostty[e.Path] = ghosttyOpen
 		} else {
-			m.vscode[e.Path] = vscodeClosed
+			m.ghostty[e.Path] = ghosttyClosed
 		}
-		m.vscodeStrict[e.Path] = snap.IsOpenOnWorktree(e.Path)
+		m.ghosttyStrict[e.Path] = snap.IsOpenOnWorktree(e.Path)
 	}
 }
 
@@ -513,7 +534,7 @@ func (m *Model) applySnapToPolledRepos() {
 			entries = append(entries, e)
 		}
 	}
-	m.applyRepoVSCode(entries, m.poll.snap)
+	m.applyRepoGhostty(entries, m.poll.snap)
 	m.redisplay(previousPath)
 }
 
@@ -550,14 +571,14 @@ func (m *Model) finishPoll(failures int, polled map[string]bool, targeted bool) 
 	for _, e := range m.worktrees {
 		live[e.Path] = true
 	}
-	for path := range m.vscode {
+	for path := range m.ghostty {
 		if !live[path] {
-			delete(m.vscode, path)
+			delete(m.ghostty, path)
 		}
 	}
-	for path := range m.vscodeStrict {
+	for path := range m.ghosttyStrict {
 		if !live[path] {
-			delete(m.vscodeStrict, path)
+			delete(m.ghosttyStrict, path)
 		}
 	}
 	prevFailures := m.pollFailures
@@ -566,7 +587,7 @@ func (m *Model) finishPoll(failures int, polled map[string]bool, targeted bool) 
 	}
 	m.revalidateConfirm(m.worktrees)
 	m.redisplay(previousPath)
-	savePollCache(m.worktrees, m.vscode, m.vscodeStrict)
+	savePollCache(m.worktrees, m.ghostty, m.ghosttyStrict)
 	if !targeted && prevFailures == 0 && m.pollFailures > 0 {
 		return m.notify(repoCountLabel(m.pollFailures)+" timed out or errored; keeping last-known rows", true)
 	}
@@ -595,24 +616,24 @@ func (m *Model) applyPollResults(msg pollResultMsg) tea.Cmd {
 		m.mergeRepoRows(r)
 	}
 
-	if msg.vscode == nil {
-		msg.vscode = map[string]vscodeState{}
+	if msg.ghostty == nil {
+		msg.ghostty = map[string]ghosttyState{}
 	}
-	if msg.vscodeStrict == nil {
-		msg.vscodeStrict = map[string]bool{}
+	if msg.ghosttyStrict == nil {
+		msg.ghosttyStrict = map[string]bool{}
 	}
 	for _, e := range m.worktrees {
 		if !failed[e.RepoPath] {
 			continue
 		}
-		if state, ok := m.vscode[e.Path]; ok {
-			msg.vscode[e.Path] = state
+		if state, ok := m.ghostty[e.Path]; ok {
+			msg.ghostty[e.Path] = state
 		}
-		if strict, ok := m.vscodeStrict[e.Path]; ok {
-			msg.vscodeStrict[e.Path] = strict
+		if strict, ok := m.ghosttyStrict[e.Path]; ok {
+			msg.ghosttyStrict[e.Path] = strict
 		}
 	}
-	m.vscode, m.vscodeStrict = msg.vscode, msg.vscodeStrict
+	m.ghostty, m.ghosttyStrict = msg.ghostty, msg.ghosttyStrict
 
 	// The batch path is only ever a full poll (tests and one-shot
 	// callers); the targeted subset shape exists solely in the streamed
@@ -707,7 +728,7 @@ func (m *Model) redisplay(previousPath string) {
 
 	// Size before the text filter so typing cannot move column borders.
 	m.allocateColumns()
-	m.table.SetRows(buildWorktreeRows(newDisplayed, m.cursor, m.home, m.pathWidth(), time.Now(), m.vscode, m.filterQuery, m.placeholder()))
+	m.table.SetRows(buildWorktreeRows(newDisplayed, m.cursor, m.home, m.pathWidth(), time.Now(), m.ghostty, m.filterQuery, m.placeholder()))
 	m.table.SetCursor(m.cursor)
 }
 
@@ -738,33 +759,33 @@ func (m Model) selectedWorktree() (worktree.Entry, bool) {
 	return displayed[idx], true
 }
 
-// vscodeState is the VS Code column's per-worktree tri-state: whether
-// a VS Code window is currently open on the worktree, answered by
-// mycelium's read-only snapshot once per poll (see vscodeStates). The
-// same match cascade Enter's open-or-focus runs backs it, so "open"
-// means Enter would focus an existing window rather than open a new
-// one.
-type vscodeState int
+// ghosttyState is the Ghostty column's per-worktree tri-state: whether
+// a Ghostty window is currently open on the worktree,
+// answered by mycelium's read-only snapshot once per poll (see
+// ghosttyStates). The same match cascade Enter's open-or-focus runs
+// backs it, so "open" means Enter would focus an existing window
+// rather than open a new one.
+type ghosttyState int
 
 const (
-	// vscodeUnknown is the zero value on purpose: a worktree missing
+	// ghosttyUnknown is the zero value on purpose: a worktree missing
 	// from the poll's map (or a poll whose window listing failed, most
-	// likely because the vscode-window-registry extension isn't
-	// installed or its directory is unreadable) renders "?" — the
-	// listing can't claim "not open", so the cell never does either.
-	vscodeUnknown vscodeState = iota
-	vscodeClosed              // checked, no window open on this worktree
-	vscodeOpen                // a window is open on this worktree
+	// likely because the Automation permission hasn't been granted or
+	// the scripted app didn't respond) renders "?" — the listing can't
+	// claim "not open", so the cell never does either.
+	ghosttyUnknown ghosttyState = iota
+	ghosttyClosed              // checked, no window open on this worktree
+	ghosttyOpen                // a window is open on this worktree
 )
 
-// vscodeCell renders the VS Code column's plain-word cell: "open", "-"
+// ghosttyCell renders the Ghostty column's plain-word cell: "open", "-"
 // for none (the Merge column's own not-applicable word), "?" for
 // unknown (canopy's Location column's own convention).
-func vscodeCell(state vscodeState) string {
+func ghosttyCell(state ghosttyState) string {
 	switch state {
-	case vscodeOpen:
+	case ghosttyOpen:
 		return "open"
-	case vscodeUnknown:
+	case ghosttyUnknown:
 		return "?"
 	default:
 		return "-"
@@ -778,9 +799,9 @@ func vscodeCell(state vscodeState) string {
 // dedicated cursor column/glyph to place it in any more, now that the
 // row highlight itself is the selection indicator. placeholder is the
 // message the empty table's single row shows (see Model.placeholder for
-// which message and why). vscode carries the latest known per-path VS
-// Code window states (see vscodeStates and applyPollResults); a missing
-// entry renders as vscodeUnknown.
+// which message and why). ghostty carries the latest known per-path VS
+// Code window states (see ghosttyStates and applyPollResults); a missing
+// entry renders as ghosttyUnknown.
 //
 // The Repo cell is only printed on the first row of each repo's block:
 // sortWorktrees already guarantees every worktree of the same repo is
@@ -796,16 +817,16 @@ func vscodeCell(state vscodeState) string {
 // the same two plain-word signals coppice's own worktree table shows:
 // whether the working tree itself is dirty/clean/stale, and separately
 // whether the branch has been merged into main yet.
-func buildWorktreeRows(worktrees []worktree.Entry, cursor int, home string, pathWidth int, now time.Time, vscode map[string]vscodeState, filterQuery, placeholder string) []table.Row {
+func buildWorktreeRows(worktrees []worktree.Entry, cursor int, home string, pathWidth int, now time.Time, ghostty map[string]ghosttyState, filterQuery, placeholder string) []table.Row {
 	if len(worktrees) == 0 {
 		// An active filter with zero matches says so (and how to back
 		// out) rather than claiming there are no worktrees at all — the
 		// unfiltered message would be a lie about why the table is
 		// empty.
 		if filterQuery != "" {
-			return []table.Row{{"", "", "", "", "", "", fmt.Sprintf("no worktrees match filter %q (esc clears)", filterQuery)}}
+			return []table.Row{{"", "", "", "", "", "", "", fmt.Sprintf("no worktrees match filter %q (esc clears)", filterQuery)}}
 		}
-		return []table.Row{{"", "", "", "", "", "", placeholder}}
+		return []table.Row{{"", "", "", "", "", "", "", placeholder}}
 	}
 
 	rows := make([]table.Row, len(worktrees))
@@ -841,13 +862,29 @@ func buildWorktreeRows(worktrees []worktree.Entry, cursor int, home string, path
 			label,
 			branchLabel(w),
 			created,
+			modifiedCell(w, now),
 			worktreeStatusLabel(w),
 			mergeStatusLabel(w),
-			vscodeCell(vscode[w.Path]),
+			ghosttyCell(ghostty[w.Path]),
 			pathCellText(w.Path, home, pathWidth),
 		}
 	}
 	return rows
+}
+
+// modifiedCell is the Modified column's rendering of Entry.ModifiedTime:
+// a humanized age like the Created column's, with "…" for a Skeleton
+// (not polled yet, same placeholder worktreeStatusLabel uses) and "-"
+// when there's nothing to report (a Stale row, or both the status walk
+// and the commit time came up empty).
+func modifiedCell(w worktree.Entry, now time.Time) string {
+	if w.Skeleton {
+		return "…"
+	}
+	if w.ModifiedTime.IsZero() {
+		return "-"
+	}
+	return humanizeSince(now.Sub(w.ModifiedTime))
 }
 
 // pathCellText is the Path column's cell: the ~-shortened path
