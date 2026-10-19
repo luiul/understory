@@ -97,7 +97,8 @@ with a dim `@` and a magenta segment, the same colors coppice gives it,
 so it reads as context next to the plain branch name. Created is the
 worktree directory's own age; Modified is when someone last worked in
 it: the later of its last commit and the newest uncommitted or untracked
-file's mtime, so a worktree with fresh edits never reads as stale just
+file's mtime, clamped up to Created so a worktree branched from an
+older base never reads as modified before it was created, so a worktree with fresh edits never reads as stale just
 because its HEAD is old (a clean worktree takes its commit time
 directly, so the steady-state poll stays cheap). Worktree/Merge are
 plain-word renderings of `wt`'s own compact status glyphs

@@ -573,9 +573,10 @@ func TestStreamAllReturnsANilChannelWhenNothingIsPolled(t *testing.T) {
 // --- last modified -------------------------------------------------------
 //
 // ModifiedTime's definition (the later of the HEAD commit time and the
-// newest mtime among changed/untracked files) is the one coppice's own
-// `_last_modified_ts` applies; these pin the read side so the two tools
-// can't drift apart.
+// newest mtime among changed/untracked files, clamped up to CreatedTime)
+// supersedes the old coppice `_last_modified_ts` one (coppice is
+// retired); these pin the read side so the column can never read as
+// modified before created.
 
 func TestApplyModifiedTimeTakesTheCommitTimeForACleanWorktree(t *testing.T) {
 	commit := time.Unix(1_700_000_000, 0)
@@ -618,6 +619,41 @@ func TestApplyModifiedTimeKeepsTheCommitTimeWhenItIsNewerThanTheEdits(t *testing
 	applyModifiedTime(entries)
 	if !entries[0].ModifiedTime.Equal(commit) {
 		t.Fatalf("got %v, want the newer commit time %v", entries[0].ModifiedTime, commit)
+	}
+}
+
+func TestApplyModifiedTimeClampsUpToCreatedTimeForAnOlderBase(t *testing.T) {
+	// wt add branches a base whose tip can predate the new worktree's
+	// directory: a clean worktree would otherwise read as modified
+	// before created. Creating the worktree is itself the newest
+	// activity, so the column shows the creation moment.
+	created := time.Now().Add(-1 * time.Hour)
+	commit := time.Now().Add(-8 * time.Hour)
+	entries := []Entry{{Path: "/w/a", CommitTime: commit, CreatedTime: created}}
+	applyModifiedTime(entries)
+	if !entries[0].ModifiedTime.Equal(created) {
+		t.Fatalf("got %v, want the clamp to CreatedTime %v", entries[0].ModifiedTime, created)
+	}
+}
+
+func TestApplyModifiedTimeClampsADirtyWorktreeWithPreservedMtimes(t *testing.T) {
+	// Files copied in with preserved mtimes (cp -p, rsync -a) can be
+	// older than the worktree they were copied into: the same clamp
+	// applies on the dirty path, not just the clean one.
+	dir := initRepo(t)
+	file := filepath.Join(dir, "scratch.txt")
+	if err := os.WriteFile(file, []byte("uncommitted"), 0o644); err != nil {
+		t.Fatalf("write an untracked file: %v", err)
+	}
+	created := time.Now().Add(-30 * time.Minute)
+	edit := time.Now().Add(-72 * time.Hour)
+	if err := os.Chtimes(file, edit, edit); err != nil {
+		t.Fatalf("stamp the untracked file: %v", err)
+	}
+	entries := []Entry{{Path: dir, CommitTime: time.Now().Add(-48 * time.Hour), Dirty: true, CreatedTime: created}}
+	applyModifiedTime(entries)
+	if !entries[0].ModifiedTime.Equal(created) {
+		t.Fatalf("got %v, want the clamp to CreatedTime %v", entries[0].ModifiedTime, created)
 	}
 }
 

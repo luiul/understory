@@ -107,9 +107,11 @@ type Entry struct {
 	Dirty bool
 	// ModifiedTime is when this worktree was last modified: the later of
 	// its HEAD commit time and the newest mtime among the files git sees
-	// as changed or untracked. That combination answers "when did someone
-	// last work here", which neither input does alone: a clean worktree's
-	// last modification is its last commit, while a worktree with fresh
+	// as changed or untracked, clamped up to CreatedTime so a worktree
+	// branched from an older base never reads as modified before it was
+	// created. That combination answers "when did someone last work
+	// here", which neither input does alone: a clean worktree's last
+	// modification is its last commit, while a worktree with fresh
 	// uncommitted edits must not read as stale just because its HEAD is
 	// old. Only a dirty worktree needs the file walk (one `git status`
 	// subprocess, see applyModifiedTime); a clean one takes CommitTime
@@ -375,9 +377,14 @@ func applyCreatedTime(entries []Entry) {
 // status that fails (removed mid-poll, huge tree past the timeout)
 // leaves CommitTime standing rather than dropping the row's data, and a
 // Stale entry keeps ModifiedTime's zero value — its directory is already
-// gone, so both the walk and the question are moot. The same
-// definition coppice's own `_last_modified_ts` applies, so the two
-// tools must not drift apart here.
+// gone, so both the walk and the question are moot. The result is then
+// clamped up to CreatedTime (see below): creating a worktree from an
+// older base is itself the newest activity, so the column can never
+// read as modified before created. This intentionally supersedes the
+// old coppice `_last_modified_ts` definition (coppice is retired,
+// kept for reference only): unclamped, a worktree branched from a base
+// whose tip predates the new directory displayed as modified before
+// it was created.
 func applyModifiedTime(entries []Entry) {
 	for i := range entries {
 		e := &entries[i]
@@ -389,6 +396,15 @@ func applyModifiedTime(entries []Entry) {
 			if t, ok := newestDirtyMTime(e.Path); ok && t.After(m) {
 				m = t
 			}
+		}
+		// A worktree created from an older base (wt add branches a base
+		// whose tip predates the new directory) would otherwise display
+		// as modified before it was created; the same goes for files
+		// copied in with preserved mtimes (cp -p, rsync -a). The creation
+		// moment is itself the newest activity when nothing newer has
+		// touched the tree, so clamp up to CreatedTime.
+		if !e.CreatedTime.IsZero() && m.Before(e.CreatedTime) {
+			m = e.CreatedTime
 		}
 		e.ModifiedTime = m
 	}
