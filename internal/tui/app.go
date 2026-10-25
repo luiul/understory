@@ -457,9 +457,8 @@ func probeTickCmd() tea.Cmd {
 	return tea.Tick(probeInterval, func(time.Time) tea.Msg { return probeTickMsg{} })
 }
 
-// snapshotCmd captures the poll's ghostty window snapshot (see
-// mycelium.SnapshotEditor): one osascript listing per ghostty of the
-// window titles,
+// snapshotCmd captures the poll's Ghostty window snapshot (see
+// mycelium.SnapshotGhostty): one osascript listing of Ghostty window titles,
 // with git work-tree lookups memoized across rows. It runs concurrently
 // with the poll's repo fan-out (tea.Batch) rather than sequentially
 // after it like the old barrier pollCmd did — the capture doesn't
@@ -508,7 +507,7 @@ type ghosttySnapshot interface {
 	IsOpenOnWorktree(path string) bool
 }
 
-// snapshotGhostty is a package-level seam onto mycelium.SnapshotEditor,
+// snapshotGhostty is a package-level seam onto mycelium.SnapshotGhostty,
 // the same pattern as openGhostty above.
 var snapshotGhostty = func() ghosttySnapshot { return mycelium.SnapshotGhostty() }
 
@@ -528,7 +527,7 @@ var (
 // permission most likely) marks every row ghosttyUnknown: the snapshot can't tell
 // open from closed, so the column renders "?" rather than a wrong "-".
 // Everything else defers to the snapshot's own match, which is Enter's
-// open-or-focus one (see mycelium.SnapshotEditor): a row reads "open"
+// open-or-focus one (see mycelium.SnapshotGhostty): a row reads "open"
 // exactly when Enter would focus an existing window.
 func ghosttyStates(entries []worktree.Entry, snapshot ghosttySnapshot) map[string]ghosttyState {
 	states := make(map[string]ghosttyState, len(entries))
@@ -943,10 +942,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // enterCmd opens or focuses a Ghostty window on the selected row's path.
-// mycelium matches windows by exact folder path against the window
-// registry (every worktree of a repo shares the repo's leaf folder name,
-// but never its path), so same-named worktrees are distinguishable
-// outright — see mycelium.OpenEditor's own doc.
+// Mycelium matches window titles against the path, so same-named
+// worktrees remain distinguishable. See mycelium.OpenGhostty's doc.
 func (m Model) enterCmd() tea.Cmd {
 	w, ok := m.selectedWorktree()
 	if !ok {

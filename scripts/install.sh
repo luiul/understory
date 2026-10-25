@@ -7,9 +7,8 @@ set -euo pipefail
 #
 # The signing is load-bearing again: dashkit v0.12.0 replaced the
 # window registry with window-title matching, so understory scripts
-# System Events on every poll (list Ghostty's and VS Code's window
-# titles) and on
-# every Enter (raise the matched window), both of which need the macOS
+# System Events on every poll (list Ghostty window titles) and on
+# every Enter (raise the matched Ghostty window), both of which need the macOS
 # Automation permission. An ad-hoc-signed binary's signature is keyed
 # to its content hash, so macOS drops any TCC grant on every rebuild,
 # while a real certificate + fixed --identifier anchors the grant

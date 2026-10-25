@@ -1,9 +1,6 @@
 # understory
 
-A live radar for git worktrees: every worktree of every repo it knows
-about (see "Worktree discovery" below), most recently committed first,
-with open-or-focus-a-VS-Code-window on Enter and confirmed removal on
-`x`.
+A live radar for git worktrees: every worktree of every repo it knows about (see "Worktree discovery" below), most recently committed first. Enter opens or focuses Ghostty, and `x` removes with confirmation.
 
 understory is the always-on counterpart to `wt`/coppice, which do the
 actual worktree work; see [Ecosystem](#ecosystem) below for how
@@ -23,7 +20,7 @@ tools, one pair for git worktrees, one pair for agent sessions:
 | [`wt`](https://worktrunk.dev) (worktrunk) | engine | creates/removes worktrees, runs lifecycle hooks (`post-start`, `pre-remove`, ...), maintains the shared registry |
 | [coppice](https://github.com/luiul/coppice) | lifecycle CLI | cross-repo `new`/`list`/`remove`/`clean` worktrees, on top of `wt`, from anywhere on disk |
 | **understory** (this repo) | worktree radar | live dashboard of every worktree in the registry; open-or-focus a Ghostty window on Enter, remove with confirmation on `x` |
-| [canopy](https://github.com/luiul/canopy) | agent radar | live, read-only dashboard of every agent CLI session on the machine; jump-to-window on Enter |
+| [canopy](https://github.com/luiul/canopy) | agent radar | live, read-only dashboard of every agent CLI session on the machine; open or focus Ghostty on Enter |
 
 ```mermaid
 flowchart LR
@@ -125,25 +122,7 @@ A changed drag saves your desired proportions for this session. Repo, Branch, an
 
 Polls still update rows during an active drag, but column geometry stays frozen until release. A terminal width change cancels the gesture before it resizes the table. Preferences live in memory only. Restart understory to return to automatic sizing.
 
-Enter opens (or, if a window is already open on that path, focuses) a VS
-Code window there via [`github.com/luiul/dashkit/mycelium`](https://github.com/luiul/dashkit/tree/main/mycelium)'s
-shared open-or-focus logic: it checks for an already-open window itself
-first, by exact folder path against the window titles (the dotfiles
-`window.title` setting renders each title as the opened folder's full
-path, so one System Events listing answers it), focuses the matched
-window directly with an AXRaise, and only forces a brand-new one
-(`-n`) once it knows none is already open. `code
---reuse-window` alone turns out not to be enough for this, since it
-silently hijacks whichever window was last active instead of opening a
-fresh one whenever no window already has the given path open (confirmed
-both empirically and in upstream reports, e.g. microsoft/vscode#121926)
-— exactly the case a worktree row that's never been opened before hits
-on every first press. Same-row repeated presses stay safe from
-duplicate windows precisely because the already-open check finds that
-new window on every subsequent press. canopy uses the exact same
-mycelium package to jump to whichever window is running a given agent,
-so this switch-or-create behavior lives in one shared place instead of
-being duplicated across both tools.
+Enter opens or focuses Ghostty at the selected worktree path through [`github.com/luiul/dashkit/mycelium`](https://github.com/luiul/dashkit/tree/main/mycelium)'s existing title matcher. It passes an empty tty because worktree rows have no agent identity. Mycelium matches window titles by path and opens a new Ghostty window when none matches. Repeated presses reuse a matching window. Canopy uses the same Ghostty matcher, with tty-preferred title matching and cwd fallback for agent rows. Neither tool uses host discovery to select an editor.
 
 ## Actions
 
@@ -158,7 +137,7 @@ ask for confirmation first (`y` confirms, `n`/`esc`/`enter` cancels, and
 an unanswered prompt cancels itself after 10 seconds, since rows keep
 repolling and reordering underneath it), then delegate to `wt remove`
 (`git worktree remove --force` for stale registrations), the same
-commands `cop remove` wraps. When the poll's editor snapshot reports a
+commands `cop remove` wraps. When the poll's Ghostty snapshot reports a
 window currently open on a removal target, the prompt says so and asks
 you to close it first, since deleting a directory out from under an open
 window strands that window on a path that no longer exists. That check
@@ -254,7 +233,7 @@ understory's.
 ## Why Go, not Python (like coppice)
 
 Same reasoning as canopy: this is 100% subprocess orchestration (`wt
-list`, `code --reuse-window`) and a polling TUI, no real computation, so a
+list`, Ghostty AppleScript) and a polling TUI, no real computation, so a
 single compiled binary with instant startup fits better than a Python
 interpreter + venv. coppice stays Python because its job (`new`, `list`,
 `remove`, `clean`) is closer to a scriptable CLI than a long-running
@@ -268,8 +247,8 @@ dashboard.
 - `internal/tui`: the Bubble Tea dashboard (table, polling timer,
   open-on-Enter via
   [`github.com/luiul/dashkit/mycelium`](https://github.com/luiul/dashkit/tree/main/mycelium)'s
-  shared open-or-focus logic — the same package canopy uses to jump to
-  whichever window is running a given agent — notifications, the
+  shared Ghostty open-or-focus logic, the same package canopy uses for
+  agent working directories, notifications, the
   confirmed-removal modal behind x/X/P/M, and the `?` help overlay, the
   modal's state machine and the overlay's renderer shared with canopy
   via
@@ -322,6 +301,7 @@ gofmt -l .   # should print nothing
 ## Limitations
 
 - Same machine, same user only.
+- Navigation only opens or focuses Ghostty. It does not move or reconnect an agent from another host. Ghostty title matching cannot select an Orca or herdr pane. Those panes are not supported navigation targets.
 - No "live" agent awareness (see above) — by design, not a gap to fill.
 - Mouse click-to-select isn't implemented (keyboard only: arrow keys +
   Enter); Bubble Tea's table widget doesn't ship row-click handling out of

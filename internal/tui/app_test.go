@@ -39,32 +39,41 @@ func TestEnterCmdIsNilWhenNothingIsSelected(t *testing.T) {
 	}
 }
 
-func TestEnterCmdThreadsTheSelectedRowsPathToMycelium(t *testing.T) {
-	// mycelium matches windows by title against the window listing —
-	// but only if understory actually hands the path over.
+func TestEnterKeyOpensGhosttyWithEmptyTtyAndSelectedPath(t *testing.T) {
+	// Exercise the Enter binding through Update, not only enterCmd.
 	orig := openGhostty
 	t.Cleanup(func() { openGhostty = orig })
+	calls := 0
 	var gotTty, gotPath string
+	wantResult := mycelium.Result{OK: true, Message: "Focused Ghostty window."}
 	openGhostty = func(tty, path string) mycelium.Result {
+		calls++
 		gotTty, gotPath = tty, path
-		return mycelium.Result{OK: true, Message: "Focused Ghostty window for " + path + "."}
+		return wantResult
 	}
 
-	target := wtEntry("/w/tardis-community", "patch/ISA-18409", 0)
+	target := wtEntry("/w/tardis-community", "patch/ISA-18409", time.Hour)
 	m := New(999, false)
-	m.applyWorktrees([]worktree.Entry{target})
-	m.table.SetCursor(0)
+	m.applyWorktrees([]worktree.Entry{wtEntry("/w/other", "main", 0), target})
+	m.table.SetCursor(1)
 
-	cmd := m.enterCmd()
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
-		t.Fatal("want enterCmd to return a command for a valid selection")
+		t.Fatal("want Enter to return a command for a valid selection")
 	}
 	msg := cmd()
-	if _, ok := msg.(openResultMsg); !ok {
+	result, ok := msg.(openResultMsg)
+	if !ok {
 		t.Fatalf("got %T, want openResultMsg", msg)
 	}
-	if gotPath != "/w/tardis-community" {
-		t.Fatalf("got %q, want %q", gotPath, "/w/tardis-community")
+	if result.result != wantResult {
+		t.Fatalf("got result %+v, want %+v", result.result, wantResult)
+	}
+	if calls != 1 {
+		t.Fatalf("OpenGhostty calls = %d, want 1", calls)
+	}
+	if gotPath != target.Path {
+		t.Fatalf("got path %q, want %q", gotPath, target.Path)
 	}
 	if gotTty != "" {
 		t.Fatalf("got tty %q, want empty: worktree rows carry no tty", gotTty)
@@ -73,10 +82,10 @@ func TestEnterCmdThreadsTheSelectedRowsPathToMycelium(t *testing.T) {
 
 func TestOpenResultMsgSetsNotificationAndSchedulesClear(t *testing.T) {
 	m := New(999, false)
-	updated, cmd := m.Update(openResultMsg{result: mycelium.Result{OK: true, Message: "Focused VS Code window."}})
+	updated, cmd := m.Update(openResultMsg{result: mycelium.Result{OK: true, Message: "Focused Ghostty window."}})
 	mm := updated.(Model)
 
-	if mm.notification != "Focused VS Code window." {
+	if mm.notification != "Focused Ghostty window." {
 		t.Fatalf("got notification %q", mm.notification)
 	}
 	if mm.notifyIsError {
@@ -255,7 +264,7 @@ func TestMouseDragOnlyResizesTheTwoColumnsStraddlingTheDraggedBorder(t *testing.
 	cols := m.table.Columns()
 	_, originY := m.renderHeader()
 	borderX := mergeBorderX(cols)
-	oldMergeWidth, oldEditorWidth := cols[colMerge].Width, cols[colGhostty].Width
+	oldMergeWidth, oldGhosttyWidth := cols[colMerge].Width, cols[colGhostty].Width
 	oldRepoWidth, oldCreatedWidth := cols[colRepo].Width, cols[colCreated].Width
 	oldPathWidth := cols[colPath].Width
 
@@ -268,8 +277,8 @@ func TestMouseDragOnlyResizesTheTwoColumnsStraddlingTheDraggedBorder(t *testing.
 	if got, want := gotCols[colMerge].Width, oldMergeWidth+4; got != want {
 		t.Fatalf("Merge width = %d, want %d", got, want)
 	}
-	if got, want := gotCols[colGhostty].Width, oldEditorWidth-4; got != want {
-		t.Fatalf("VS Code width = %d, want %d (its own left-hand neighbor absorbs the drag)", got, want)
+	if got, want := gotCols[colGhostty].Width, oldGhosttyWidth-4; got != want {
+		t.Fatalf("Ghostty width = %d, want %d (its own left-hand neighbor absorbs the drag)", got, want)
 	}
 	// Every column not touching the dragged border must stay put.
 	if got := gotCols[colRepo].Width; got != oldRepoWidth {

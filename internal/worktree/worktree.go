@@ -37,7 +37,7 @@ import (
 // bound killed slow-but-healthy polls and their rows silently vanished
 // from the view while `cop list` (no timeout) kept showing them. It's a
 // var, not a const, so tests can swap in a short bound, the same seam
-// pattern as the tui package's openVSCode.
+// pattern as the tui package's openGhostty.
 var listTimeout = 60 * time.Second
 
 // defaultTimeout bounds the cheap one-off git subprocesses (rev-parse,
